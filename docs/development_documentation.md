@@ -56,6 +56,7 @@
 - `/api/clients/sync`, `/api/clients/sync-status`, `/api/clients`
 - `/api/queue/preview`, `/api/queue/forecast`, `/api/queue/build`, `/api/queue`
 - `/api/run/status`, `/api/run/start`, `/api/run/stop`
+- `/api/app/shutdown`
 - `/api/dialogs`, `/api/dialogs/by-phone/*`, `/api/dialogs/prune`
 - `/api/alerts`, `/api/alerts/{id}/status`
 - `/api/reports/weekly`, `/api/events`, `/api/events/run`

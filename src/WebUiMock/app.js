@@ -3918,6 +3918,35 @@ async function stopRun(reason = "Остановка по запросу опер
   }
 }
 
+async function shutdownApplicationFromUi() {
+  const message = state.runRuntime
+    ? "Сейчас выполняется рассылка. Остановить цикл и завершить приложение?"
+    : "Завершить приложение?";
+  const confirmed = window.confirm(message);
+  if (!confirmed) return;
+
+  if (state.runRuntime) {
+    await stopRun("Остановлено оператором при завершении приложения.");
+  }
+
+  try {
+    const result = await fetchApiJson("/api/app/shutdown", {
+      method: "POST"
+    });
+    addRunLog(result?.message || "Приложение завершает работу.");
+    toast("Приложение завершает работу");
+    setTimeout(() => {
+      try {
+        window.close();
+      } catch {
+        // no-op
+      }
+    }, 400);
+  } catch (error) {
+    toast(`Не удалось завершить приложение: ${error?.message || "ошибка backend"}`);
+  }
+}
+
 async function switchTab(tabId, options = {}) {
   const { skipUnsavedGuard = false, actionLabel = "перейти в другую вкладку" } = options;
   const activeTabBtn = document.querySelector(".tab-btn.active");
@@ -5056,6 +5085,12 @@ function bindEvents() {
   $("globalStop").addEventListener("click", () => {
     void stopRun();
   });
+  const globalExitBtn = $("globalExit");
+  if (globalExitBtn) {
+    globalExitBtn.addEventListener("click", () => {
+      void shutdownApplicationFromUi();
+    });
+  }
   $("alertSummary").addEventListener("click", async () => {
     const switched = await switchTab("run", { actionLabel: "перейти к уведомлениям" });
     if (!switched) return;

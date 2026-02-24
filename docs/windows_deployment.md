@@ -30,7 +30,7 @@ dotnet publish src/Collector/Collector.csproj \
 - устанавливает приложение в профиль пользователя;
 - создает ярлык на рабочем столе;
 - создает ярлык в меню Пуск;
-- после установки запускает `Collector.exe --serve --port 5057`.
+- запускает приложение через launcher без консольного окна (backend стартует в фоне).
 
 ## 1.2 Сборка с Mac через GitHub Actions
 Если локально только macOS, используйте workflow:
@@ -50,14 +50,8 @@ dotnet publish src/Collector/Collector.csproj \
 Если в релизной папке присутствует `playwright.ps1`, передать его тоже.
 
 ## 3. Первый запуск у сотрудника
-1. Скопировать `Collector.exe` в рабочую папку, например: `C:\SmsControl\`.
-2. Запустить:
-
-```powershell
-.\Collector.exe --serve --port 5057
-```
-
-3. Открыть интерфейс: `http://127.0.0.1:5057/`.
+1. Запустить ярлык `SMS Control` на рабочем столе или в меню Пуск.
+2. Launcher поднимает backend и открывает интерфейс `http://127.0.0.1:5057/`.
 
 ## 4. Браузеры Playwright (обязательно)
 Для работы Rocketman-части нужны браузеры Playwright.

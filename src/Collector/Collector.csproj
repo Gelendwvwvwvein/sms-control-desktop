@@ -16,6 +16,7 @@
     <EmbeddedResource Include="..\WebUiMock\styles.css" LogicalName="Collector.WebUi.styles.css" />
     <EmbeddedResource Include="..\WebUiMock\uikit.js" LogicalName="Collector.WebUi.uikit.js" />
     <EmbeddedResource Include="..\WebUiMock\favicon.svg" LogicalName="Collector.WebUi.favicon.svg" />
+    <EmbeddedResource Include="..\WebUiMock\favicon.ico" LogicalName="Collector.WebUi.favicon.ico" />
   </ItemGroup>
 
   <ItemGroup>

@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using System.Globalization;
 using System.Text.Json;
 
@@ -1803,6 +1804,45 @@ public static class ApiHost
             }
         });
 
+        app.MapPost("/api/app/shutdown", async (AppDbContext db, RunService run, IHostApplicationLifetime lifetime, CancellationToken ct) =>
+        {
+            try
+            {
+                var status = await run.GetStatusAsync(db, null, ct);
+                if (status.HasRunningSession && status.RunningSessionId > 0)
+                {
+                    try
+                    {
+                        await run.StopAsync(db, new RunStopRequestDto
+                        {
+                            RunSessionId = status.RunningSessionId,
+                            Reason = "Остановлено при завершении приложения."
+                        }, ct);
+                    }
+                    catch
+                    {
+                        // ignore stop errors during shutdown
+                    }
+                }
+            }
+            catch
+            {
+                // ignore status errors during shutdown
+            }
+
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(300);
+                lifetime.StopApplication();
+            });
+
+            return Results.Ok(new
+            {
+                action = "shutdown",
+                message = "Приложение завершает работу."
+            });
+        });
+
         var localUiUrl = $"http://127.0.0.1:{port}/";
         Console.WriteLine($"Backend API started on {url}");
         Console.WriteLine($"Local UI: {localUiUrl}");
@@ -1874,6 +1914,7 @@ public static class ApiHost
         Console.WriteLine("  GET /api/run/status");
         Console.WriteLine("  POST /api/run/start");
         Console.WriteLine("  POST /api/run/stop");
+        Console.WriteLine("  POST /api/app/shutdown");
         await app.RunAsync();
     }
 

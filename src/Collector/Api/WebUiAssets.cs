@@ -13,7 +13,7 @@ public static class WebUiAssets
             ["/styles.css"] = ("Collector.WebUi.styles.css", "text/css; charset=utf-8"),
             ["/uikit.js"] = ("Collector.WebUi.uikit.js", "application/javascript; charset=utf-8"),
             ["/favicon.svg"] = ("Collector.WebUi.favicon.svg", "image/svg+xml"),
-            ["/favicon.ico"] = ("Collector.WebUi.favicon.svg", "image/svg+xml")
+            ["/favicon.ico"] = ("Collector.WebUi.favicon.ico", "image/x-icon")
         };
 
     private static readonly Dictionary<string, byte[]> Cache = new(StringComparer.OrdinalIgnoreCase);

@@ -141,6 +141,7 @@ dotnet run --project src/Collector/Collector.csproj -- --output "out/clients.jso
     - `GET /api/run/status`
     - `POST /api/run/start`
     - `POST /api/run/stop`
+    - `POST /api/app/shutdown`
   - Background dispatcher:
     - processes `running` run-session in background;
     - transitions jobs through `queued/running/retry/stopped/sent/failed`;
@@ -255,8 +256,8 @@ On Windows build machine with Inno Setup 6 installed:
 Installer output:
 - `out\installer\SmsControlSetup.exe`
 
-Installer creates Start Menu shortcut and desktop shortcut to:
-- `Collector.exe --serve --port 5057`
+Installer creates Start Menu and desktop shortcuts that run hidden launcher:
+- `SmsControlLauncher.ps1` -> starts backend in background and opens `http://127.0.0.1:5057/`
 
 ## Build Setup.exe from macOS (GitHub Actions)
 - Workflow file: `.github/workflows/windows-installer.yml`
