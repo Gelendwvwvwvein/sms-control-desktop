@@ -12,6 +12,8 @@ $publishDir = Join-Path $repoRoot "out\publish\$Runtime"
 $issPath = Join-Path $scriptDir "SmsControlSetup.iss"
 $collectorExe = Join-Path $publishDir "Collector.exe"
 $bundledPlaywrightDir = Join-Path $publishDir "ms-playwright"
+$playwrightScriptRid = Join-Path $repoRoot "src\Collector\bin\$Configuration\net8.0\$Runtime\playwright.ps1"
+$playwrightScriptDefault = Join-Path $repoRoot "src\Collector\bin\$Configuration\net8.0\playwright.ps1"
 
 Write-Host "Publishing application..."
 dotnet publish $projectPath `
@@ -39,9 +41,34 @@ Write-Host "Installing Playwright Chromium into publish folder..."
 $prevPlaywrightPath = $env:PLAYWRIGHT_BROWSERS_PATH
 $env:PLAYWRIGHT_BROWSERS_PATH = $bundledPlaywrightDir
 try {
-    & $collectorExe --install-playwright
-    if ($LASTEXITCODE -ne 0) {
-        throw "Playwright install failed with exit code $LASTEXITCODE"
+    $playwrightInstalled = $false
+
+    $playwrightScripts = @($playwrightScriptRid, $playwrightScriptDefault) | Select-Object -Unique
+    foreach ($playwrightScript in $playwrightScripts) {
+        if (!(Test-Path $playwrightScript)) {
+            continue
+        }
+
+        Write-Host "Using Playwright script: $playwrightScript"
+        & $playwrightScript install chromium
+        if ($LASTEXITCODE -eq 0) {
+            $playwrightInstalled = $true
+            break
+        }
+
+        Write-Warning "Playwright script failed with exit code $LASTEXITCODE"
+    }
+
+    if (-not $playwrightInstalled) {
+        Write-Host "Falling back to Collector.exe --install-playwright"
+        & $collectorExe --install-playwright
+        if ($LASTEXITCODE -eq 0) {
+            $playwrightInstalled = $true
+        }
+    }
+
+    if (-not $playwrightInstalled) {
+        throw "Playwright install failed"
     }
 }
 finally {
