@@ -12,8 +12,11 @@ $publishDir = Join-Path $repoRoot "out\publish\$Runtime"
 $issPath = Join-Path $scriptDir "SmsControlSetup.iss"
 $collectorExe = Join-Path $publishDir "Collector.exe"
 $bundledPlaywrightDir = Join-Path $publishDir "ms-playwright"
+$bundledDriverDir = Join-Path $publishDir ".playwright"
 $playwrightScriptRid = Join-Path $repoRoot "src\Collector\bin\$Configuration\net8.0\$Runtime\playwright.ps1"
 $playwrightScriptDefault = Join-Path $repoRoot "src\Collector\bin\$Configuration\net8.0\playwright.ps1"
+$driverSourceRid = Join-Path $repoRoot "src\Collector\bin\$Configuration\net8.0\$Runtime\.playwright"
+$driverSourceDefault = Join-Path $repoRoot "src\Collector\bin\$Configuration\net8.0\.playwright"
 
 Write-Host "Publishing application..."
 dotnet publish $projectPath `
@@ -31,6 +34,28 @@ if (!(Test-Path $publishDir)) {
 
 if (!(Test-Path $collectorExe)) {
     throw "Collector.exe not found after publish: $collectorExe"
+}
+
+if (!(Test-Path $bundledDriverDir)) {
+    $driverSource = $null
+    if (Test-Path $driverSourceRid) {
+        $driverSource = $driverSourceRid
+    }
+    elseif (Test-Path $driverSourceDefault) {
+        $driverSource = $driverSourceDefault
+    }
+
+    if ($null -eq $driverSource) {
+        throw "Playwright driver folder (.playwright) not found in publish output or bin output."
+    }
+
+    Write-Host "Copying Playwright driver from $driverSource"
+    Copy-Item -Path $driverSource -Destination $bundledDriverDir -Recurse -Force
+}
+
+$driverNode = Get-ChildItem -Path (Join-Path $bundledDriverDir "node") -Recurse -File -Filter "node.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -eq $driverNode) {
+    throw "Playwright driver node.exe not found in: $bundledDriverDir"
 }
 
 if (Test-Path $bundledPlaywrightDir) {

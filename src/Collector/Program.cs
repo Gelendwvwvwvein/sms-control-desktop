@@ -270,17 +270,27 @@ static async Task<int> AwaitTaskAsSuccessCodeAsync(Task task)
 
 static void ConfigureBundledPlaywrightBrowsers()
 {
-    const string envVar = "PLAYWRIGHT_BROWSERS_PATH";
-    var existing = Environment.GetEnvironmentVariable(envVar);
-    if (!string.IsNullOrWhiteSpace(existing))
+    const string browsersEnvVar = "PLAYWRIGHT_BROWSERS_PATH";
+    const string driverEnvVar = "PLAYWRIGHT_DRIVER_SEARCH_PATH";
+
+    var existingBrowsers = Environment.GetEnvironmentVariable(browsersEnvVar);
+    if (string.IsNullOrWhiteSpace(existingBrowsers))
     {
-        return;
+        var bundledBrowsersPath = Path.Combine(AppContext.BaseDirectory, "ms-playwright");
+        if (Directory.Exists(bundledBrowsersPath))
+        {
+            Environment.SetEnvironmentVariable(browsersEnvVar, bundledBrowsersPath);
+        }
     }
 
-    var bundledPath = Path.Combine(AppContext.BaseDirectory, "ms-playwright");
-    if (Directory.Exists(bundledPath))
+    var existingDriver = Environment.GetEnvironmentVariable(driverEnvVar);
+    if (string.IsNullOrWhiteSpace(existingDriver))
     {
-        Environment.SetEnvironmentVariable(envVar, bundledPath);
+        var bundledDriverRoot = Path.Combine(AppContext.BaseDirectory, ".playwright");
+        if (Directory.Exists(bundledDriverRoot))
+        {
+            Environment.SetEnvironmentVariable(driverEnvVar, AppContext.BaseDirectory);
+        }
     }
 }
 

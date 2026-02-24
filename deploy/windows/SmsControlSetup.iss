@@ -18,7 +18,9 @@ UninstallDisplayIcon={app}\Collector.exe
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Files]
-Source: "..\..\out\publish\win-x64\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\out\publish\win-x64\*"; DestDir: "{app}"; Excludes: ".playwright\*,ms-playwright\*"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\..\out\publish\win-x64\.playwright\*"; DestDir: "{app}\.playwright"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+Source: "..\..\out\publish\win-x64\ms-playwright\*"; DestDir: "{app}\ms-playwright"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 
 [Icons]
 Name: "{autodesktop}\SMS Control"; Filename: "{app}\Collector.exe"; Parameters: "--desktop --port 5057"; WorkingDir: "{app}"; IconFilename: "{app}\Collector.exe"
