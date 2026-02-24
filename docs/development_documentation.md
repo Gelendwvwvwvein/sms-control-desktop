@@ -11,6 +11,8 @@
 ## 2. Архитектура
 - Backend: `src/Collector` (.NET 8, Minimal API, EF Core SQLite).
 - UI: встроенные статики из `src/WebUiMock` (`index.html`, `app.js`, `styles.css`, `uikit.js`).
+- Конфиг селекторов Rocketman вшит в `.exe` как embedded resource (`Collector.Config.rocketman.selectors.json`).
+- Загрузка селекторов в runtime идет из embedded resource (без поиска внешних fallback-файлов).
 - Хранилище: SQLite (`smscontrol.db`), путь по умолчанию:
   - Windows: `%LOCALAPPDATA%/SmsControl/smscontrol.db`
   - macOS/Linux: локальная app-data директория `SmsControl/smscontrol.db`
@@ -65,5 +67,7 @@
 - Базовая проверка:
   - `dotnet build src/Collector/Collector.csproj`
   - `node --check src/WebUiMock/app.js`
+- Установка браузера Playwright для Rocketman:
+  - `dotnet run --project src/Collector/Collector.csproj -- --install-playwright`
 - Старт локально:
   - `dotnet run --project src/Collector/Collector.csproj -- --serve`

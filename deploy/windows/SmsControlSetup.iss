@@ -28,5 +28,5 @@ Name: "{group}\Удалить SMS Control"; Filename: "{uninstallexe}"
 
 [Run]
 Filename: "{app}\Collector.exe"; Parameters: "--db-migrate"; Description: "Инициализация базы данных"; Flags: runhidden waituntilterminated skipifsilent
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\playwright.ps1"" install chromium"; Description: "Установка Playwright Chromium"; Flags: runhidden waituntilterminated skipifsilent; Check: FileExists(ExpandConstant('{app}\playwright.ps1'))
+Filename: "{app}\Collector.exe"; Parameters: "--install-playwright"; Description: "Установка Playwright Chromium"; Flags: runhidden waituntilterminated skipifsilent
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\SmsControlLauncher.ps1"""; Description: "Запустить SMS Control"; Flags: nowait postinstall skipifsilent

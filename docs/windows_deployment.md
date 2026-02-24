@@ -47,8 +47,6 @@ dotnet publish src/Collector/Collector.csproj \
 - Вариант A: `SmsControlSetup.exe` (рекомендуется).
 - Вариант B: `Collector.exe` (ручная установка).
 
-Если в релизной папке присутствует `playwright.ps1`, передать его тоже.
-
 ## 3. Первый запуск у сотрудника
 1. Запустить ярлык `SMS Control` на рабочем столе или в меню Пуск.
 2. Launcher поднимает backend и открывает интерфейс `http://127.0.0.1:5057/`.
@@ -56,13 +54,13 @@ dotnet publish src/Collector/Collector.csproj \
 ## 4. Браузеры Playwright (обязательно)
 Для работы Rocketman-части нужны браузеры Playwright.
 
-Если рядом с `Collector.exe` есть `playwright.ps1`:
+Установить браузер Chromium:
 
 ```powershell
-pwsh .\playwright.ps1 install
+.\Collector.exe --install-playwright
 ```
 
-После этого перезапустить `Collector.exe --serve`.
+После установки перезапустить `Collector.exe --serve`.
 
 ## 5. Где хранится локальная БД
 По умолчанию на Windows:

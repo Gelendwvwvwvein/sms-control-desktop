@@ -17,6 +17,7 @@
     <EmbeddedResource Include="..\WebUiMock\uikit.js" LogicalName="Collector.WebUi.uikit.js" />
     <EmbeddedResource Include="..\WebUiMock\favicon.svg" LogicalName="Collector.WebUi.favicon.svg" />
     <EmbeddedResource Include="..\WebUiMock\favicon.ico" LogicalName="Collector.WebUi.favicon.ico" />
+    <EmbeddedResource Include="Config\rocketman.selectors.json" LogicalName="Collector.Config.rocketman.selectors.json" />
   </ItemGroup>
 
   <ItemGroup>

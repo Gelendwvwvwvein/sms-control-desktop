@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Encodings.Web;
+using System.Reflection;
 using Collector.Api;
 using Collector.Config;
 using Collector.Data;
@@ -16,36 +17,6 @@ static string GetArg(string[] args, string key)
 
 static bool HasFlag(string[] args, string key) => args.Contains(key);
 
-static string ResolveSelectorsPath(string path)
-{
-    if (string.IsNullOrWhiteSpace(path)) return path;
-    if (Path.IsPathRooted(path)) return path;
-
-    var candidates = new List<string>();
-    var cwd = Directory.GetCurrentDirectory();
-    candidates.Add(Path.GetFullPath(Path.Combine(cwd, path)));
-    candidates.Add(Path.GetFullPath(Path.Combine(cwd, "Config", "rocketman.selectors.json")));
-
-    var dir = cwd;
-    for (var i = 0; i < 6; i++)
-    {
-        candidates.Add(Path.GetFullPath(Path.Combine(dir, path)));
-        var parent = Directory.GetParent(dir);
-        if (parent == null) break;
-        dir = parent.FullName;
-    }
-
-    var baseDir = AppContext.BaseDirectory;
-    candidates.Add(Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", path)));
-
-    foreach (var candidate in candidates.Distinct())
-    {
-        if (File.Exists(candidate)) return candidate;
-    }
-
-    return Path.GetFullPath(Path.Combine(cwd, path));
-}
-
 var argsList = args;
 
 var phone = GetArg(argsList, "--phone");
@@ -58,6 +29,7 @@ var dbPath = GetArg(argsList, "--db-path");
 var timeoutRaw = GetArg(argsList, "--timeout");
 var parallelRaw = GetArg(argsList, "--parallel");
 var dbMigrate = HasFlag(argsList, "--db-migrate");
+var installPlaywright = HasFlag(argsList, "--install-playwright");
 var sendTestSms = HasFlag(argsList, "--send-test-sms");
 var smsTo = GetArg(argsList, "--to");
 var smsMessage = GetArg(argsList, "--message");
@@ -94,6 +66,54 @@ if (dbMigrate)
     else
     {
         Console.WriteLine($"Database is up to date. Path: {migrateResult.DatabasePath}");
+    }
+
+    return;
+}
+
+if (installPlaywright)
+{
+    try
+    {
+        var playwrightAssembly = typeof(IPlaywright).Assembly;
+        var programType = playwrightAssembly.GetType("Microsoft.Playwright.Program");
+        if (programType is null)
+        {
+            Console.WriteLine("Playwright CLI class not found in Microsoft.Playwright assembly.");
+            return;
+        }
+
+        var method = programType.GetMethod(
+            "Main",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static,
+            binder: null,
+            types: [typeof(string[])],
+            modifiers: null);
+
+        if (method is null)
+        {
+            Console.WriteLine("Playwright CLI entrypoint not found.");
+            return;
+        }
+
+        var result = method.Invoke(null, [new[] { "install", "chromium" }]);
+        var code = result switch
+        {
+            Task<int> taskInt => await taskInt,
+            Task task => await AwaitTaskAsSuccessCodeAsync(task),
+            int intCode => intCode,
+            null => 0,
+            _ => throw new InvalidOperationException(
+                $"Unexpected Playwright CLI return type: {result.GetType().FullName}")
+        };
+
+        Console.WriteLine(code == 0
+            ? "Playwright Chromium installed."
+            : $"Playwright install finished with code {code}.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Playwright install failed: {ex.Message}");
     }
 
     return;
@@ -182,24 +202,21 @@ var opts = new CollectorOptions
     Headless = headless,
     LoginUrl = loginUrl,
     OutputPath = string.IsNullOrWhiteSpace(output) ? "out/clients.json" : output,
-    SelectorsPath = string.IsNullOrWhiteSpace(selectorsPath) ? "src/Collector/Config/rocketman.selectors.json" : selectorsPath,
+    SelectorsPath = selectorsPath,
     TimeoutMs = int.TryParse(timeoutRaw, out var t) ? t : 0,
     Parallelism = int.TryParse(parallelRaw, out var p) ? Math.Max(1, p) : 3,
     Debug = debug,
     DebugLogPath = string.IsNullOrWhiteSpace(debugLog) ? "out/debug.log" : debugLog
 };
 
-var selectorsResolved = ResolveSelectorsPath(opts.SelectorsPath);
-if (!File.Exists(selectorsResolved))
+SelectorConfig cfg;
+try
 {
-    Console.WriteLine($"Selectors file not found: {selectorsResolved}");
-    return;
+    cfg = await SelectorConfigLoader.LoadAsync(opts.SelectorsPath, CancellationToken.None);
 }
-
-var cfg = JsonSerializer.Deserialize<SelectorConfig>(await File.ReadAllTextAsync(selectorsResolved));
-if (cfg == null)
+catch (Exception ex)
 {
-    Console.WriteLine("Failed to parse selectors config.");
+    Console.WriteLine($"Failed to load selectors config: {ex.Message}");
     return;
 }
 
@@ -224,3 +241,9 @@ await File.WriteAllTextAsync(opts.OutputPath, JsonSerializer.Serialize(results, 
 }));
 
 Console.WriteLine($"Done. Collected: {results.Count}. Output: {opts.OutputPath}");
+
+static async Task<int> AwaitTaskAsSuccessCodeAsync(Task task)
+{
+    await task;
+    return 0;
+}

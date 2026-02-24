@@ -5,21 +5,9 @@
 - Playwright browsers
 
 ## Install Playwright browsers
-After first build/restore:
-- Windows (PowerShell):
-  `pwsh .\src\Collector\bin\Debug\net8.0\playwright.ps1 install`
-- macOS/Linux (bash):
-  `bash ./src/Collector/bin/Debug/net8.0/playwright.sh install`
-
-If `playwright.sh` is missing after build:
+После первой сборки:
 ```bash
-dotnet clean src/Collector/Collector.csproj
-dotnet build src/Collector/Collector.csproj
-```
-If it is still missing, install the CLI and run browser install:
-```bash
-dotnet tool install --global Microsoft.Playwright.CLI
-~/.dotnet/tools/playwright install
+dotnet run --project src/Collector/Collector.csproj -- --install-playwright
 ```
 
 ## Run
@@ -53,7 +41,7 @@ dotnet run --project src/Collector/Collector.csproj -- --output "out/clients.jso
 
 ## Notes
 - Tokenized login URL must be provided at runtime, not stored in config.
-- Selectors are in `src/Collector/Config/rocketman.selectors.json`.
+- Selectors are embedded into the executable (`Collector.Config.rocketman.selectors.json`); external file is not required on user PC.
 - During table sync collector selects the maximum available page size automatically (not hardcoded to `1000`).
 - If `ClientsList.Pagination.NextPage` is configured, collector walks all pages; without it only the current page is collected.
 - `--timeout 0` means wait until data appears (no timeout).

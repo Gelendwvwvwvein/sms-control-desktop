@@ -21,7 +21,7 @@ public sealed class ClientSyncService
         string password,
         CancellationToken cancellationToken)
     {
-        var selectorConfig = await LoadSelectorConfigAsync(cancellationToken);
+        var selectorConfig = await SelectorConfigLoader.LoadAsync(null, cancellationToken);
         var options = new CollectorOptions
         {
             Headless = true,
@@ -337,40 +337,6 @@ public sealed class ClientSyncService
         }
 
         return string.Empty;
-    }
-
-    private static string ResolveSelectorsPath()
-    {
-        var candidates = new[]
-        {
-            Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "src/Collector/Config/rocketman.selectors.json")),
-            Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "Config/rocketman.selectors.json")),
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "Config/rocketman.selectors.json")),
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "Config/rocketman.selectors.json"))
-        };
-
-        foreach (var candidate in candidates)
-        {
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        throw new FileNotFoundException("Не найден файл селекторов Rocketman.", "rocketman.selectors.json");
-    }
-
-    private static async Task<SelectorConfig> LoadSelectorConfigAsync(CancellationToken cancellationToken)
-    {
-        var path = ResolveSelectorsPath();
-        var json = await File.ReadAllTextAsync(path, cancellationToken);
-        var config = System.Text.Json.JsonSerializer.Deserialize<SelectorConfig>(json);
-        if (config is null)
-        {
-            throw new InvalidOperationException("Не удалось прочитать конфиг селекторов Rocketman.");
-        }
-
-        return config;
     }
 
     private static string NormalizePhone(string rawPhone)
