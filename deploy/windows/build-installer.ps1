@@ -17,6 +17,16 @@ $playwrightScriptRid = Join-Path $repoRoot "src\Collector\bin\$Configuration\net
 $playwrightScriptDefault = Join-Path $repoRoot "src\Collector\bin\$Configuration\net8.0\playwright.ps1"
 $driverSourceRid = Join-Path $repoRoot "src\Collector\bin\$Configuration\net8.0\$Runtime\.playwright"
 $driverSourceDefault = Join-Path $repoRoot "src\Collector\bin\$Configuration\net8.0\.playwright"
+$nugetPlaywrightRoot = Join-Path $env:USERPROFILE ".nuget\packages\microsoft.playwright"
+
+function Test-PlaywrightDriverLayout([string]$rootPath) {
+    if ([string]::IsNullOrWhiteSpace($rootPath)) {
+        return $false
+    }
+
+    return (Test-Path (Join-Path $rootPath "node\win32_x64\node.exe")) -and
+           (Test-Path (Join-Path $rootPath "package\cli.js"))
+}
 
 Write-Host "Publishing application..."
 dotnet publish $projectPath `
@@ -36,26 +46,41 @@ if (!(Test-Path $collectorExe)) {
     throw "Collector.exe not found after publish: $collectorExe"
 }
 
-if (!(Test-Path $bundledDriverDir)) {
-    $driverSource = $null
-    if (Test-Path $driverSourceRid) {
-        $driverSource = $driverSourceRid
+$driverCandidates = @()
+if (Test-Path $driverSourceRid) {
+    $driverCandidates += $driverSourceRid
+}
+if (Test-Path $driverSourceDefault) {
+    $driverCandidates += $driverSourceDefault
+}
+if (Test-Path $nugetPlaywrightRoot) {
+    $nugetCandidate = Get-ChildItem -Path $nugetPlaywrightRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        ForEach-Object { Join-Path $_.FullName ".playwright" } |
+        Where-Object { Test-Path $_ } |
+        Select-Object -First 1
+    if (-not [string]::IsNullOrWhiteSpace($nugetCandidate)) {
+        $driverCandidates += $nugetCandidate
     }
-    elseif (Test-Path $driverSourceDefault) {
-        $driverSource = $driverSourceDefault
+}
+
+if (-not (Test-PlaywrightDriverLayout $bundledDriverDir)) {
+    if (Test-Path $bundledDriverDir) {
+        Remove-Item -Path $bundledDriverDir -Recurse -Force
     }
 
-    if ($null -eq $driverSource) {
-        throw "Playwright driver folder (.playwright) not found in publish output or bin output."
+    $driverSource = $driverCandidates | Where-Object { Test-PlaywrightDriverLayout $_ } | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($driverSource)) {
+        $candidatesText = ($driverCandidates | Select-Object -Unique) -join "; "
+        throw "Playwright driver folder (.playwright) is missing required files. Checked candidates: $candidatesText"
     }
 
     Write-Host "Copying Playwright driver from $driverSource"
     Copy-Item -Path $driverSource -Destination $bundledDriverDir -Recurse -Force
 }
 
-$driverNode = Get-ChildItem -Path (Join-Path $bundledDriverDir "node") -Recurse -File -Filter "node.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($null -eq $driverNode) {
-    throw "Playwright driver node.exe not found in: $bundledDriverDir"
+if (-not (Test-PlaywrightDriverLayout $bundledDriverDir)) {
+    throw "Playwright driver node.exe/cli.js not found in: $bundledDriverDir"
 }
 
 if (Test-Path $bundledPlaywrightDir) {
