@@ -321,7 +321,10 @@ static bool StartServeProcess(string[] args)
             Path.GetFileNameWithoutExtension(processPath),
             "dotnet",
             StringComparison.OrdinalIgnoreCase);
-        var entryAssemblyPath = Assembly.GetEntryAssembly()?.Location;
+        var entryAssemblyName = Assembly.GetEntryAssembly()?.GetName().Name;
+        var entryAssemblyPath = string.IsNullOrWhiteSpace(entryAssemblyName)
+            ? string.Empty
+            : Path.Combine(AppContext.BaseDirectory, $"{entryAssemblyName}.dll");
         var useDotnetDllBootstrap = isDotnetHost &&
                                     !string.IsNullOrWhiteSpace(entryAssemblyPath) &&
                                     File.Exists(entryAssemblyPath);
