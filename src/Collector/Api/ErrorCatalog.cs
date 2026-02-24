@@ -19,6 +19,8 @@ public static class ErrorCatalog
         ["ROCKETMAN_DOM_CHANGED"] = new("critical", false, "Обновите селекторы в конфигурации. Обратитесь к разработчику."),
         ["SYNC_SELECTORS_NOT_FOUND"] = new("critical", false, "Селекторы не найдены. Проверьте конфигурацию Rocketman."),
         ["SYNC_INVALID_STATE"] = new("warning", false, "Сначала остановите текущую операцию синхронизации."),
+        ["SYNC_PLAYWRIGHT_NOT_INSTALLED"] = new("critical", false, "Установите Chromium для Playwright командой `Collector.exe --install-playwright`."),
+        ["SYNC_PLAYWRIGHT_ERROR"] = new("critical", true, "Проверьте запуск Chromium на этом ПК и доступ к Rocketman, затем повторите актуализацию."),
         ["DB_UNAVAILABLE"] = new("critical", true, "Проверьте доступность файла БД и права доступа."),
         ["CHANNEL_NOT_FOUND"] = new("warning", false, "Канал не найден. Обновите список каналов."),
         ["CHANNEL_CONFIG_INVALID"] = new("critical", false, "Проверьте endpoint и токен канала в настройках."),

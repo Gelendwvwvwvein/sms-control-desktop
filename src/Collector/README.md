@@ -232,20 +232,23 @@ dotnet publish src/Collector/Collector.csproj \
 
 Run on employee PC:
 ```powershell
-.\Collector.exe --serve --port 5057
+.\Collector.exe --desktop --port 5057
 ```
-Then open `http://127.0.0.1:5057/` in browser.
+`--desktop` starts backend in background (if not running) and opens `http://127.0.0.1:5057/` in browser.
 
 ## Build Setup.exe (Inno Setup, desktop shortcut)
 On Windows build machine with Inno Setup 6 installed:
 ```powershell
 .\deploy\windows\build-installer.ps1
 ```
+`build-installer.ps1` also installs Playwright Chromium into `out\publish\win-x64\ms-playwright` before packaging.
+
 Installer output:
 - `out\installer\SmsControlSetup.exe`
+- includes bundled Playwright Chromium (`ms-playwright`) for offline use on employee PC.
 
-Installer creates Start Menu and desktop shortcuts that run hidden launcher:
-- `SmsControlLauncher.ps1` -> starts backend in background and opens `http://127.0.0.1:5057/`
+Installer creates Start Menu and desktop shortcuts to:
+- `Collector.exe --desktop --port 5057`
 
 ## Build Setup.exe from macOS (GitHub Actions)
 - Workflow file: `.github/workflows/windows-installer.yml`

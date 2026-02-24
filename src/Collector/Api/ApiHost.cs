@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Playwright;
 using System.Globalization;
 using System.Text.Json;
 
@@ -1206,6 +1207,31 @@ public static class ApiHost
                     Message = ex.Message
                 });
             }
+            catch (TimeoutException ex)
+            {
+                return ErrBadRequest(new ApiErrorDto
+                {
+                    Code = "ROCKETMAN_UNAVAILABLE",
+                    Message = ex.Message
+                });
+            }
+            catch (PlaywrightException ex)
+            {
+                if (IsPlaywrightBrowserMissing(ex))
+                {
+                    return ErrBadRequest(new ApiErrorDto
+                    {
+                        Code = "SYNC_PLAYWRIGHT_NOT_INSTALLED",
+                        Message = "На этом ПК не установлен Chromium для Playwright. Запустите \"Collector.exe --install-playwright\" и повторите актуализацию."
+                    });
+                }
+
+                return ErrBadRequest(new ApiErrorDto
+                {
+                    Code = "SYNC_PLAYWRIGHT_ERROR",
+                    Message = ex.Message
+                });
+            }
             catch (Exception ex)
             {
                 return Results.Problem(
@@ -1993,6 +2019,14 @@ public static class ApiHost
     private static bool HasFlag(string[] args, string key)
     {
         return args.Contains(key, StringComparer.Ordinal);
+    }
+
+    private static bool IsPlaywrightBrowserMissing(PlaywrightException ex)
+    {
+        var message = ex.Message ?? string.Empty;
+        return message.Contains("Executable doesn't exist", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("Please run the following command", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("ms-playwright", StringComparison.OrdinalIgnoreCase);
     }
 
     private static IResult ErrBadRequest(ApiErrorDto? dto) =>

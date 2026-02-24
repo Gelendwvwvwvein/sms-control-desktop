@@ -319,7 +319,16 @@ async function fetchApiJson(path, options = {}) {
       : await response.text();
 
     if (!response.ok) {
-      const message = payload?.message || payload?.title || `HTTP ${response.status}`;
+      const baseMessage = typeof payload === "object" && payload !== null
+        ? (payload.message || payload.title || "")
+        : "";
+      const detail = typeof payload === "object" && payload !== null
+        ? (payload.detail || "")
+        : "";
+      const fallbackMessage = typeof payload === "string" && payload.trim()
+        ? payload.trim()
+        : `HTTP ${response.status}`;
+      const message = [baseMessage, detail].filter(Boolean).join(". ") || fallbackMessage;
       const action = payload?.operatorAction;
       const fullMessage = action ? `${message} Рекомендация: ${action}` : message;
       const err = new Error(fullMessage);

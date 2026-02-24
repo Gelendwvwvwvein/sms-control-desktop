@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Encodings.Web;
 using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
 using Collector.Api;
 using Collector.Config;
 using Collector.Data;
@@ -18,6 +20,7 @@ static string GetArg(string[] args, string key)
 static bool HasFlag(string[] args, string key) => args.Contains(key);
 
 var argsList = args;
+ConfigureBundledPlaywrightBrowsers();
 
 var phone = GetArg(argsList, "--phone");
 var password = GetArg(argsList, "--password");
@@ -45,6 +48,14 @@ var smsOpenOnly = HasFlag(argsList, "--open-only");
 var headless = !HasFlag(argsList, "--headed");
 var debug = HasFlag(argsList, "--debug");
 var serveApi = HasFlag(argsList, "--serve");
+var desktopMode = HasFlag(argsList, "--desktop");
+
+if (desktopMode)
+{
+    HideConsoleWindowIfPossible();
+    await LaunchDesktopAsync(argsList);
+    return;
+}
 
 if (serveApi)
 {
@@ -80,6 +91,7 @@ if (installPlaywright)
         if (programType is null)
         {
             Console.WriteLine("Playwright CLI class not found in Microsoft.Playwright assembly.");
+            Environment.ExitCode = 1;
             return;
         }
 
@@ -93,6 +105,7 @@ if (installPlaywright)
         if (method is null)
         {
             Console.WriteLine("Playwright CLI entrypoint not found.");
+            Environment.ExitCode = 1;
             return;
         }
 
@@ -107,13 +120,20 @@ if (installPlaywright)
                 $"Unexpected Playwright CLI return type: {result.GetType().FullName}")
         };
 
-        Console.WriteLine(code == 0
-            ? "Playwright Chromium installed."
-            : $"Playwright install finished with code {code}.");
+        if (code == 0)
+        {
+            Console.WriteLine("Playwright Chromium installed.");
+        }
+        else
+        {
+            Console.WriteLine($"Playwright install finished with code {code}.");
+            Environment.ExitCode = code;
+        }
     }
     catch (Exception ex)
     {
         Console.WriteLine($"Playwright install failed: {ex.Message}");
+        Environment.ExitCode = 1;
     }
 
     return;
@@ -247,3 +267,198 @@ static async Task<int> AwaitTaskAsSuccessCodeAsync(Task task)
     await task;
     return 0;
 }
+
+static void ConfigureBundledPlaywrightBrowsers()
+{
+    const string envVar = "PLAYWRIGHT_BROWSERS_PATH";
+    var existing = Environment.GetEnvironmentVariable(envVar);
+    if (!string.IsNullOrWhiteSpace(existing))
+    {
+        return;
+    }
+
+    var bundledPath = Path.Combine(AppContext.BaseDirectory, "ms-playwright");
+    if (Directory.Exists(bundledPath))
+    {
+        Environment.SetEnvironmentVariable(envVar, bundledPath);
+    }
+}
+
+static async Task LaunchDesktopAsync(string[] args)
+{
+    var portRaw = GetArg(args, "--port");
+    var port = int.TryParse(portRaw, out var parsedPort) ? parsedPort : 5057;
+    port = Math.Clamp(port, 1, 65535);
+
+    var loopbackHost = "127.0.0.1";
+    var healthUrl = $"http://{loopbackHost}:{port}/health";
+    var uiUrl = $"http://{loopbackHost}:{port}/";
+
+    var backendUp = await IsBackendHealthyAsync(healthUrl);
+    if (!backendUp)
+    {
+        var started = StartServeProcess(args);
+        if (started)
+        {
+            await WaitForBackendHealthyAsync(healthUrl, TimeSpan.FromSeconds(15));
+        }
+    }
+
+    OpenInDefaultBrowser(uiUrl);
+}
+
+static bool StartServeProcess(string[] args)
+{
+    try
+    {
+        var processPath = Environment.ProcessPath;
+        if (string.IsNullOrWhiteSpace(processPath) || !File.Exists(processPath))
+        {
+            return false;
+        }
+
+        var isDotnetHost = string.Equals(
+            Path.GetFileNameWithoutExtension(processPath),
+            "dotnet",
+            StringComparison.OrdinalIgnoreCase);
+        var entryAssemblyPath = Assembly.GetEntryAssembly()?.Location;
+        var useDotnetDllBootstrap = isDotnetHost &&
+                                    !string.IsNullOrWhiteSpace(entryAssemblyPath) &&
+                                    File.Exists(entryAssemblyPath);
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = processPath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = AppContext.BaseDirectory
+        };
+
+        if (useDotnetDllBootstrap)
+        {
+            startInfo.ArgumentList.Add(entryAssemblyPath!);
+        }
+
+        foreach (var arg in BuildServeArguments(args))
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
+        _ = Process.Start(startInfo);
+        return true;
+    }
+    catch
+    {
+        return false;
+    }
+}
+
+static IReadOnlyList<string> BuildServeArguments(string[] args)
+{
+    var result = new List<string> { "--serve" };
+    for (var i = 0; i < args.Length; i++)
+    {
+        var arg = args[i];
+        if (string.Equals(arg, "--desktop", StringComparison.Ordinal) ||
+            string.Equals(arg, "--serve", StringComparison.Ordinal))
+        {
+            continue;
+        }
+
+        if (string.Equals(arg, "--lan", StringComparison.Ordinal))
+        {
+            result.Add("--lan");
+            continue;
+        }
+
+        if (string.Equals(arg, "--port", StringComparison.Ordinal) ||
+            string.Equals(arg, "--host", StringComparison.Ordinal) ||
+            string.Equals(arg, "--db-path", StringComparison.Ordinal))
+        {
+            if (i + 1 < args.Length)
+            {
+                result.Add(arg);
+                result.Add(args[i + 1]);
+                i++;
+            }
+        }
+    }
+
+    return result;
+}
+
+static async Task<bool> WaitForBackendHealthyAsync(string healthUrl, TimeSpan timeout)
+{
+    var startedAt = DateTime.UtcNow;
+    while (DateTime.UtcNow - startedAt < timeout)
+    {
+        if (await IsBackendHealthyAsync(healthUrl))
+        {
+            return true;
+        }
+
+        await Task.Delay(250);
+    }
+
+    return await IsBackendHealthyAsync(healthUrl);
+}
+
+static async Task<bool> IsBackendHealthyAsync(string healthUrl)
+{
+    try
+    {
+        using var httpClient = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(2)
+        };
+        using var response = await httpClient.GetAsync(healthUrl);
+        return response.IsSuccessStatusCode;
+    }
+    catch
+    {
+        return false;
+    }
+}
+
+static void OpenInDefaultBrowser(string url)
+{
+    try
+    {
+        _ = Process.Start(new ProcessStartInfo
+        {
+            FileName = url,
+            UseShellExecute = true
+        });
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Failed to open browser automatically: {ex.Message}. Open manually: {url}");
+    }
+}
+
+static void HideConsoleWindowIfPossible()
+{
+    if (!OperatingSystem.IsWindows())
+    {
+        return;
+    }
+
+    try
+    {
+        var handle = GetConsoleWindow();
+        if (handle != IntPtr.Zero)
+        {
+            _ = ShowWindow(handle, 0);
+        }
+    }
+    catch
+    {
+        // ignore errors, desktop mode can continue even if console window stays visible
+    }
+}
+
+[DllImport("kernel32.dll")]
+static extern IntPtr GetConsoleWindow();
+
+[DllImport("user32.dll")]
+static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);

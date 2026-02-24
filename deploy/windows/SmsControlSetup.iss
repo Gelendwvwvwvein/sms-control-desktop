@@ -19,14 +19,11 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 
 [Files]
 Source: "..\..\out\publish\win-x64\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "SmsControlLauncher.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autodesktop}\SMS Control"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\SmsControlLauncher.ps1"""; WorkingDir: "{app}"
-Name: "{group}\SMS Control"; Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\SmsControlLauncher.ps1"""; WorkingDir: "{app}"
+Name: "{autodesktop}\SMS Control"; Filename: "{app}\Collector.exe"; Parameters: "--desktop --port 5057"; WorkingDir: "{app}"; IconFilename: "{app}\Collector.exe"
+Name: "{group}\SMS Control"; Filename: "{app}\Collector.exe"; Parameters: "--desktop --port 5057"; WorkingDir: "{app}"; IconFilename: "{app}\Collector.exe"
 Name: "{group}\Удалить SMS Control"; Filename: "{uninstallexe}"
 
 [Run]
-Filename: "{app}\Collector.exe"; Parameters: "--db-migrate"; Description: "Инициализация базы данных"; Flags: runhidden waituntilterminated skipifsilent
-Filename: "{app}\Collector.exe"; Parameters: "--install-playwright"; Description: "Установка Playwright Chromium"; Flags: runhidden waituntilterminated skipifsilent
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\SmsControlLauncher.ps1"""; Description: "Запустить SMS Control"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Collector.exe"; Parameters: "--desktop --port 5057"; Description: "Запустить SMS Control"; Flags: nowait postinstall skipifsilent
