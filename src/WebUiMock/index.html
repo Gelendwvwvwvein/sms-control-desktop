@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SMS Control Panel</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260224">
+  <link rel="alternate icon" href="/favicon.ico?v=20260224">
+  <link rel="shortcut icon" href="/favicon.ico?v=20260224">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">SC</div>
+        <div>
+          <h1>SMS Control</h1>
+          <p>Локальная панель сотрудника</p>
+        </div>
+      </div>
+      <nav class="tabs" id="tabs">
+        <button class="tab-btn active" data-tab="run">Запуск</button>
+        <button class="tab-btn" data-tab="settings">Настройки</button>
+        <button class="tab-btn" data-tab="templates">Шаблоны</button>
+        <button class="tab-btn" data-tab="clients">База клиентов</button>
+        <button class="tab-btn" data-tab="queue">Очередь</button>
+        <button class="tab-btn" data-tab="dialogs">Диалоги</button>
+        <button class="tab-btn" data-tab="stoplist">Стоп-лист</button>
+        <button class="tab-btn" data-tab="reports">Отчеты</button>
+      </nav>
+      <div class="status-box">
+        <p class="status-title">Сессия</p>
+        <p id="sessionStatus">Готово к запуску</p>
+      </div>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <div>
+          <h2 id="screenTitle">Запуск</h2>
+          <p id="screenSubtitle">Дневной цикл и оперативный контроль</p>
+        </div>
+        <div class="topbar-actions">
+          <button type="button" class="notify-chip notify-chip-btn" id="alertSummary" title="Перейти к карточкам уведомлений">Актуальных: 0 / Всего: 0</button>
+          <button class="primary-btn" id="globalStart">Запуск</button>
+          <button class="danger-btn" id="globalStop" disabled>Остановить</button>
+        </div>
+      </header>
+
+      <section class="tab-screen active" id="tab-run">
+        <div class="grid two">
+          <article class="card accent">
+            <h3>Дневной цикл</h3>
+            <p>Сбор данных Rocketman, генерация очереди, отправка SMS, комментарии в договоре.</p>
+            <div class="actions">
+              <button class="ghost-btn" id="runSyncDb">Актуализировать базу клиентов</button>
+              <button class="primary-btn" id="runStart">Запуск</button>
+            </div>
+            <p class="ui-notice ui-notice-warning" id="dbSyncStatus">Перед запуском нажмите «Актуализировать базу клиентов».</p>
+          </article>
+          <article class="card">
+            <h3>Фильтр запуска рассылки</h3>
+            <div class="filter-groups">
+              <div class="filter-group">
+                <div class="filter-group-head">
+                  <h4>Часовые пояса</h4>
+                  <div class="actions slim">
+                    <button class="ghost-btn" id="runTzSelectAll">Выбрать все</button>
+                    <button class="ghost-btn" id="runTzClearAll">Снять все</button>
+                  </div>
+                </div>
+                <div class="check-grid compact" id="tzFilterBlock">
+                  <label><input type="checkbox" class="run-tz" value="-1" checked> МСК -1</label>
+                  <label><input type="checkbox" class="run-tz" value="0" checked> МСК 0</label>
+                  <label><input type="checkbox" class="run-tz" value="1" checked> МСК +1</label>
+                  <label><input type="checkbox" class="run-tz" value="2" checked> МСК +2</label>
+                  <label><input type="checkbox" class="run-tz" value="3" checked> МСК +3</label>
+                  <label><input type="checkbox" class="run-tz" value="4" checked> МСК +4</label>
+                  <label><input type="checkbox" class="run-tz" value="5" checked> МСК +5</label>
+                  <label><input type="checkbox" class="run-tz" value="6" checked> МСК +6</label>
+                  <label><input type="checkbox" class="run-tz" value="7" checked> МСК +7</label>
+                  <label><input type="checkbox" class="run-tz" value="8" checked> МСК +8</label>
+                  <label><input type="checkbox" class="run-tz" value="9" checked> МСК +9</label>
+                </div>
+              </div>
+              <div class="filter-group">
+                <div class="filter-group-head">
+                  <h4>Диапазоны просрочки</h4>
+                  <div class="actions slim">
+                    <button class="ghost-btn" id="runOverdueSelectAll">Выбрать все</button>
+                    <button class="ghost-btn" id="runOverdueClearAll">Снять все</button>
+                  </div>
+                </div>
+                <div class="check-grid compact">
+                  <label><input type="checkbox" class="run-overdue" value="3-15" checked> Просрочка 3-15</label>
+                  <label><input type="checkbox" class="run-overdue" value="16-29" checked> Просрочка 16-29</label>
+                  <label><input type="checkbox" class="run-overdue" value="30-45" checked> Просрочка 30-45</label>
+                  <label><input type="checkbox" class="run-overdue" value="46-59" checked> Просрочка 46-59</label>
+                </div>
+              </div>
+            </div>
+            <label>Точная просрочка (день, опционально)
+              <input type="number" id="runExactDay" min="3" max="59" placeholder="Например 30">
+            </label>
+            <div class="actions">
+              <button class="ghost-btn" id="runSelectAll">Выбрать всё</button>
+              <button class="ghost-btn" id="runClearAll">Снять всё</button>
+              <button class="ghost-btn" id="runFilterReset">Сбросить фильтр</button>
+              <button class="primary-btn" id="runFilterApply">Сформировать плановую очередь</button>
+            </div>
+            <p class="ui-notice ui-notice-info" id="runFilterSummary">После актуализации сформируйте плановую очередь по фильтрам.</p>
+            <div class="forecast-box">
+              <h4>Прогноз длительности по фильтру</h4>
+              <div class="forecast-grid">
+                <div><span>Клиентов в запуске</span><strong id="planClients">0</strong></div>
+                <div><span>Интервал (мин)</span><strong id="planGap">8</strong></div>
+                <div><span>Пауза по TZ</span><strong id="planTzWait">0 мин</strong></div>
+                <div><span>Пауза по интервалу</span><strong id="planGapWait">0 мин</strong></div>
+                <div><span>Итого до завершения</span><strong id="planTotal">0 мин</strong></div>
+                <div><span>Плановый финиш (МСК)</span><strong id="planFinish">--:--</strong></div>
+              </div>
+              <p class="ui-notice ui-notice-warning" id="planHint">При необходимости задайте фильтры и нажмите "Сформировать плановую очередь".</p>
+            </div>
+          </article>
+        </div>
+        <div class="grid two">
+          <article class="card">
+            <h3>Индикаторы</h3>
+            <div class="metrics">
+              <div class="metric"><span>В базе клиентов</span><strong id="mClients">0</strong></div>
+              <div class="metric"><span>В плановой/текущей очереди</span><strong id="mQueue">0</strong></div>
+              <div class="metric"><span>Отправлено</span><strong id="mSent">0</strong></div>
+              <div class="metric"><span>Ошибки</span><strong id="mErrors">0</strong></div>
+            </div>
+          </article>
+          <article class="card" id="alertsCard">
+            <h3>Уведомления по каналам</h3>
+            <div class="alert-toolbar">
+              <label>Показывать
+                <select id="alertViewFilter">
+                  <option value="active">Только актуальные</option>
+                  <option value="all">Все</option>
+                  <option value="resolved">Только решенные</option>
+                  <option value="irrelevant">Только неактуальные</option>
+                </select>
+              </label>
+            </div>
+            <div class="alert-list" id="alertList"></div>
+          </article>
+        </div>
+        <article class="card">
+          <h3>Живой лог выполнения</h3>
+          <div class="log" id="runLog"></div>
+        </article>
+      </section>
+
+      <section class="tab-screen" id="tab-settings">
+        <div class="grid two">
+          <article class="card">
+            <h3>Rocketman</h3>
+            <label>URL входа<input id="cfgLoginUrl" value="https://rocketman.ru/manager/auth/login"></label>
+            <label>Логин<input id="cfgLogin"></label>
+            <label>Пароль
+              <div class="password-field">
+                <input id="cfgPassword" type="password" autocomplete="current-password">
+                <button type="button" class="ghost-btn password-toggle-btn" id="cfgPasswordToggle" aria-pressed="false">Показать</button>
+              </div>
+            </label>
+          </article>
+
+          <article class="card">
+            <h3>Правила отправки</h3>
+            <label>Интервал между SMS (мин)<input id="cfgGap" type="number" min="1" value="8"></label>
+            <div class="form-row">
+              <label>Рабочее окно: начало<input id="cfgWorkWindowStart" type="time" value="08:00"></label>
+              <label>Рабочее окно: конец<input id="cfgWorkWindowEnd" type="time" value="21:00"></label>
+            </div>
+            <p class="muted-note">Рабочее окно применяется ко всем исходящим сообщениям по локальному времени клиента.</p>
+            <label class="inline-toggle">
+              <input type="checkbox" id="cfgAllowLiveDispatch" checked>
+              <span>Разрешить реальную рассылку в LIVE-режиме</span>
+            </label>
+            <p class="ui-notice ui-notice-warning">Если переключатель выключен, запуск LIVE-очереди будет заблокирован.</p>
+          </article>
+        </div>
+
+        <div class="actions">
+          <button class="primary-btn" id="saveAll">Сохранить настройки</button>
+        </div>
+
+        <article class="card">
+          <h3>Android-каналы (Traccar)</h3>
+          <table>
+            <thead><tr><th>Канал</th><th>Endpoint</th><th>Токен</th><th>SIM</th><th>Статус</th><th>Последний check</th><th>Действия</th></tr></thead>
+            <tbody id="channelsBody"></tbody>
+          </table>
+          <div id="channelFormWrap" class="inline-form hidden">
+            <h4 id="channelFormTitle">Новый Android-канал</h4>
+            <div class="form-row">
+              <label>Название канала<input id="newChannelName" placeholder="Например SIM #4"></label>
+              <label>Номер SIM<input id="newChannelSim" placeholder="+79XXXXXXXXX"></label>
+            </div>
+            <label>Endpoint<input id="newChannelEndpoint" placeholder="http://192.168.0.50:8082/"></label>
+            <label>Токен канала<input id="newChannelToken" placeholder="UUID token"></label>
+            <p class="muted-note">При редактировании оставьте токен пустым, если не нужно его менять.</p>
+            <div class="actions">
+              <button class="ghost-btn" id="cancelChannel">Отмена</button>
+              <button class="primary-btn" id="saveChannel">Сохранить канал</button>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="ghost-btn" id="addChannel">Добавить канал</button>
+            <button class="primary-btn" id="checkChannels">Проверить каналы</button>
+          </div>
+        </article>
+
+        <article class="card">
+          <h3>Настраиваемые тексты комментариев</h3>
+          <div class="grid two">
+            <label>Ранние сообщения (1-2)<input id="cfgCommentSms2" value="смс2"></label>
+            <label>Третье до 30 дней<input id="cfgCommentSms3" value="смс3"></label>
+            <label>Первое сообщение 30+<input id="cfgCommentKa1" value="смс от ка"></label>
+            <label>Повторные 30+ (используйте {n})<input id="cfgCommentKaN" value="смс ка{n}"></label>
+            <label>Финальное 55-59<input id="cfgCommentKaFinal" value="смс ка фин"></label>
+          </div>
+          <p class="muted-note">Селекторы для поля комментария и кнопки сохранения добавим на этапе бэкенда.</p>
+        </article>
+
+        <article class="card" id="manualPresetCard">
+          <h3>Типовые ответы для ручных диалогов</h3>
+          <p class="ui-notice ui-notice-info manual-preset-intro-note">Здесь создаются и редактируются типовые ответы. Они используются кнопкой «Черновик из типового» во вкладке «Диалоги».</p>
+          <div class="manual-preset-layout">
+            <div class="manual-preset-list-wrap">
+              <table class="manual-preset-table">
+                <thead><tr><th>Название</th><th>Текст</th><th></th></tr></thead>
+                <tbody id="manualPresetBody"></tbody>
+              </table>
+            </div>
+            <div class="manual-preset-editor">
+              <label>Название типового ответа<input id="manualPresetTitle" placeholder="Например: Договоренность об оплате завтра"></label>
+              <label>Текст типового ответа<textarea id="manualPresetText" rows="5" placeholder="{полное_фио}, зафиксировал договоренность об оплате до завтра. Ориентировочная сумма {сумма_долга}."></textarea></label>
+              <p class="muted-note">Поддерживаемые переменные: {полное_фио}, {сумма_долга}.</p>
+              <p class="ui-notice ui-notice-warning" id="manualPresetEditorStatus">Выберите типовой ответ из списка или создайте новый.</p>
+              <div class="actions manual-preset-editor-actions">
+                <button class="ghost-btn" id="manualPresetNew">Создать новый типовой</button>
+                <button class="primary-btn" id="manualPresetSave">Сохранить типовой</button>
+                <button class="ghost-btn" id="manualPresetCancel">Отменить изменения</button>
+                <button class="danger-btn" id="manualPresetDelete">Удалить типовой</button>
+              </div>
+            </div>
+          </div>
+        </article>
+
+      </section>
+
+      <section class="tab-screen" id="tab-templates">
+        <div class="grid two">
+          <article class="card">
+            <h3>Список шаблонов</h3>
+            <div class="actions slim">
+              <button class="ghost-btn" id="tplNew">Создать новый шаблон</button>
+            </div>
+            <table>
+              <thead><tr><th>Название</th><th>Тип</th><th>Статус</th><th>Окно просрочки</th><th></th></tr></thead>
+              <tbody id="templatesBody"></tbody>
+            </table>
+          </article>
+
+          <article class="card">
+            <h3>Редактор шаблона</h3>
+            <label>Тип шаблона
+              <select id="tplType"></select>
+            </label>
+            <p class="ui-notice ui-notice-info" id="tplTypeRule">Выберите тип шаблона. Он определяет, каким клиентам доступен шаблон при автоподборе.</p>
+            <label>Название<input id="tplName"></label>
+            <label>Текст<textarea id="tplText" rows="8"></textarea></label>
+            <div class="chips">
+              <button class="chip" data-token="{полное_фио}">{полное_фио}</button>
+              <button class="chip" data-token="{сумма_долга}">{сумма_долга}</button>
+            </div>
+            <p class="ui-notice ui-notice-info">Доступные переменные: полное ФИО (обязательно с отчеством) и сумма долга по формуле.</p>
+            <p class="ui-notice ui-notice-warning" id="tplEditorStatus">Выберите шаблон из списка для редактирования.</p>
+            <div class="actions">
+              <button class="ghost-btn" id="tplDraft">В черновик</button>
+              <button class="primary-btn" id="tplPublish">Сделать активным</button>
+              <button class="ghost-btn" id="tplCancel">Отменить изменения</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="tab-screen" id="tab-clients">
+        <article class="card">
+          <h3>Актуальная база клиентов</h3>
+          <p class="muted-note">Эта вкладка показывает полный набор клиентов после кнопки «Актуализировать базу клиентов».</p>
+          <div class="filters">
+            <label>Поиск
+              <input id="clientsSearch" placeholder="ФИО, телефон или № договора">
+            </label>
+            <label>Часовой пояс
+              <select id="clientsFilterTz">
+                <option value="all">Все</option>
+                <option value="-1">МСК -1</option>
+                <option value="0">МСК 0</option>
+                <option value="1">МСК +1</option>
+                <option value="2">МСК +2</option>
+                <option value="3">МСК +3</option>
+                <option value="4">МСК +4</option>
+                <option value="5">МСК +5</option>
+                <option value="6">МСК +6</option>
+                <option value="7">МСК +7</option>
+                <option value="8">МСК +8</option>
+                <option value="9">МСК +9</option>
+              </select>
+            </label>
+            <label>Просрочка
+              <select id="clientsFilterOverdue">
+                <option value="all">Все</option>
+                <option value="3-15">3-15</option>
+                <option value="16-29">16-29</option>
+                <option value="30-45">30-45</option>
+                <option value="46-59">46-59</option>
+              </select>
+            </label>
+          </div>
+          <div class="actions bulk-toolbar table-actions-sticky">
+            <span class="bulk-meta" id="clientsBulkMeta">Выбрано: 0</span>
+            <button class="ghost-btn" id="clientsSelectVisible">Выбрать все</button>
+            <button class="ghost-btn" id="clientsClearSelection">Снять выбор</button>
+            <button class="ghost-btn" id="clientsBulkAddStop">В стоп-лист</button>
+            <button class="ghost-btn" id="clientsBulkRemoveStop">Убрать из стоп-листа</button>
+            <button class="ghost-btn" id="clientsBulkReturnPlan">Вернуть в план</button>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th class="select-col"><input type="checkbox" id="clientsSelectAllRows" title="Выбрать все видимые"></th>
+                <th>Клиент</th><th>Карточка</th><th>Телефон</th><th>Пояс</th><th>Просрочка</th><th>Сумма долга</th><th>Диалог</th><th>В плане</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="clientsDbBody"></tbody>
+          </table>
+        </article>
+      </section>
+
+      <section class="tab-screen" id="tab-queue">
+        <article class="card">
+          <h3>Плановая/текущая очередь отправок</h3>
+          <p class="muted-note">До запуска очередь можно редактировать вручную. Во время запуска фильтры и состав текущей очереди не пересчитываются.</p>
+          <div class="filters">
+            <label>Поиск
+              <input id="queueSearch" placeholder="ФИО, телефон или № договора">
+            </label>
+            <label>Статус
+              <select id="queueFilterStatus">
+                <option value="all">Все</option>
+                <option value="queued">В очереди</option>
+                <option value="running">В работе</option>
+                <option value="retry">Повтор</option>
+                <option value="stopped">Остановлено</option>
+                <option value="sent">Отправлено</option>
+                <option value="failed">Ошибка</option>
+              </select>
+            </label>
+            <label>Часовой пояс
+              <select id="queueFilterTz">
+                <option value="all">Все</option>
+                <option value="-1">МСК -1</option>
+                <option value="0">МСК 0</option>
+                <option value="1">МСК +1</option>
+                <option value="2">МСК +2</option>
+                <option value="3">МСК +3</option>
+                <option value="4">МСК +4</option>
+                <option value="5">МСК +5</option>
+                <option value="6">МСК +6</option>
+                <option value="7">МСК +7</option>
+                <option value="8">МСК +8</option>
+                <option value="9">МСК +9</option>
+              </select>
+            </label>
+            <label>Просрочка
+              <select id="queueFilterOverdue">
+                <option value="all">Все</option>
+                <option value="3-15">3-15</option>
+                <option value="16-29">16-29</option>
+                <option value="30-45">30-45</option>
+                <option value="46-59">46-59</option>
+              </select>
+            </label>
+          </div>
+          <div class="actions">
+            <button class="ghost-btn" id="queueRetryErrors" disabled>Переотправить ошибки</button>
+          </div>
+          <p class="muted-note" id="queueRetryHint">Переотправляются задачи со статусами «Ошибка» и «Остановлено».</p>
+          <div class="actions bulk-toolbar table-actions-sticky">
+            <span class="bulk-meta" id="queueBulkMeta">Выбрано: 0</span>
+            <button class="ghost-btn" id="queueSelectVisible">Выбрать все</button>
+            <button class="ghost-btn" id="queueClearSelection">Снять выбор</button>
+            <button class="ghost-btn" id="queueBulkAddStop">В стоп-лист</button>
+            <button class="ghost-btn" id="queueBulkRemoveStop">Убрать из стоп-листа</button>
+            <button class="ghost-btn" id="queueBulkRemovePlan">Убрать из плана</button>
+            <div class="bulk-template-assign">
+              <label class="inline-select">Шаблон для выделенных
+                <select id="queueBulkTemplate"></select>
+              </label>
+              <button class="primary-btn" id="queueBulkSetTemplate">Применить выбранный шаблон</button>
+            </div>
+          </div>
+          <div class="table-scroll queue-table-wrap">
+            <table class="queue-table">
+              <thead>
+                <tr>
+                  <th class="select-col"><input type="checkbox" id="queueSelectAllRows" title="Выбрать все видимые"></th>
+                  <th>Клиент</th><th>Карточка</th><th>Телефон</th><th>Пояс</th><th>Просрочка</th><th>Шаблон</th><th>Канал</th><th>Сумма долга</th><th>План</th><th>Статус</th><th>Попытки</th><th>Диалог</th><th></th>
+                </tr>
+              </thead>
+              <tbody id="queueBody"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="tab-screen" id="tab-dialogs">
+        <div class="dialog-layout">
+          <aside class="dialog-list" id="dialogList"></aside>
+          <article class="card dialog-main">
+            <h3 id="dialogTitle">Выберите клиента</h3>
+            <div class="dialog-maintenance">
+              <div class="actions slim">
+                <button class="danger-btn" id="dialogDeleteCurrent">Удалить диалог клиента</button>
+              </div>
+              <div class="dialog-prune-form">
+                <label>Удалить диалоги старше (дней)
+                  <input type="number" id="dialogPruneDays" min="1" value="30">
+                </label>
+                <button class="ghost-btn" id="dialogPruneOld">Удалить старые диалоги</button>
+              </div>
+              <p class="ui-notice ui-notice-warning">Удаление диалогов необратимо. Удаляйте только неактуальную историю.</p>
+            </div>
+            <div class="chat" id="chatThread"></div>
+            <label class="inline-toggle">
+              <input type="checkbox" id="dialogPreviewToggle">
+              <span>Режим просмотра превью SMS для выбранного клиента</span>
+            </label>
+            <div class="dialog-preview-panel hidden" id="dialogPreviewPanel">
+              <p class="ui-notice ui-notice-info" id="dialogPreviewStatus">Превью еще не загружено.</p>
+              <p class="muted-note dialog-preview-meta" id="dialogPreviewMeta">Итоговый текст формируется backend по текущему шаблону и данным клиента.</p>
+              <textarea class="dialog-preview-editor" id="dialogPreviewEditor" rows="6" placeholder="Здесь можно отредактировать SMS для выбранного клиента"></textarea>
+              <div class="actions slim dialog-preview-actions">
+                <button class="primary-btn" id="dialogPreviewSave" disabled>Сохранить текст для клиента</button>
+                <button class="ghost-btn" id="dialogPreviewReset" disabled>Сбросить к шаблону</button>
+              </div>
+              <p class="muted-note dialog-preview-hint" id="dialogPreviewEditorHint">После сохранения этот текст будет отправлен именно этому клиенту вместо текста шаблона.</p>
+            </div>
+            <label class="dialog-preset-label">Типовой ответ для черновика
+              <select id="manualPreset">
+                <option value="">Загрузка типовых ответов...</option>
+              </select>
+            </label>
+            <p class="ui-notice ui-notice-info">Кнопка «Черновик из типового» подставляет готовый текст для выбранного клиента в поле ручного сообщения.</p>
+            <div class="actions slim manual-preset-link-actions">
+              <button class="ghost-btn" id="openManualPresetManager" disabled>Редактировать выбранный типовой ответ</button>
+            </div>
+            <label>Ручное сообщение
+              <textarea id="manualInput" rows="3" placeholder="Введите текст для ручной отправки клиенту"></textarea>
+            </label>
+            <div class="actions">
+              <button class="primary-btn" id="manualSend">Отправить вручную</button>
+              <button class="ghost-btn" id="manualDraft">Черновик из типового</button>
+              <button class="danger-btn" id="toStopList">В стоп-лист</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="tab-screen" id="tab-stoplist">
+        <article class="card">
+          <h3>Стоп-лист по номеру телефона</h3>
+          <div class="inline-form">
+            <div class="form-row">
+              <label>Номер телефона клиента<input id="stopPhoneInput" placeholder="+79XXXXXXXXX"></label>
+              <label>Причина (опционально)<input id="stopReasonInput" placeholder="Например: договоренность об оплате"></label>
+            </div>
+            <div class="actions">
+              <button class="primary-btn" id="stopAddByPhone">Добавить в стоп-лист</button>
+            </div>
+          </div>
+          <div class="filters">
+            <label>Поиск
+              <input id="stopSearch" placeholder="ФИО, телефон или № договора">
+            </label>
+          </div>
+          <div class="actions bulk-toolbar table-actions-sticky">
+            <span class="bulk-meta" id="stopBulkMeta">Выбрано: 0</span>
+            <button class="ghost-btn" id="stopSelectVisible">Выбрать все</button>
+            <button class="ghost-btn" id="stopClearSelection">Снять выбор</button>
+            <button class="danger-btn" id="stopBulkRemove">Убрать выбранные</button>
+          </div>
+          <table>
+            <thead><tr><th class="select-col"><input type="checkbox" id="stopSelectAllRows" title="Выбрать все видимые"></th><th>Телефон</th><th>ФИО</th><th>№ договора</th><th>Причина</th><th>Добавлен</th><th>Источник</th><th></th></tr></thead>
+            <tbody id="stopListBody"></tbody>
+          </table>
+        </article>
+      </section>
+
+      <section class="tab-screen" id="tab-reports">
+        <div class="grid three">
+          <article class="card"><h3>Отправлено сегодня</h3><strong class="big" id="rSentToday">0</strong></article>
+          <article class="card"><h3>Ошибки сегодня</h3><strong class="big" id="rErrorsToday">0</strong></article>
+          <article class="card"><h3>В стоп-листе</h3><strong class="big" id="rStopCount">0</strong></article>
+        </div>
+        <article class="card">
+          <h3>Недельная динамика</h3>
+          <div class="bars" id="weeklyBars"></div>
+        </article>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="./uikit.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

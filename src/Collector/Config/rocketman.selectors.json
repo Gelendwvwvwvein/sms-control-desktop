@@ -1,0 +1,61 @@
+{
+  "Login": {
+    "PhoneInput": {
+      "Primary": "#managerloginform-phone",
+      "Fallback": "/html/body/div[2]/div/div/div/form/div[1]/input"
+    },
+    "PasswordInput": {
+      "Primary": "#managerloginform-password",
+      "Fallback": "/html/body/div[2]/div/div/div/form/div[2]/input"
+    },
+    "Submit": {
+      "Primary": "/html/body/div[2]/div/div/div/form/div[3]/button",
+      "Fallback": "/html/body/div[2]/div/div/div/form/div[3]/button"
+    },
+    "PostLoginReady": {
+      "Primary": "#w1 > div.clearfix.filter-group-btn > div.pull-right > select",
+      "Fallback": "/html/body/div[1]/div/div[2]/form/div[4]/div[2]/select"
+    }
+  },
+  "ClientsList": {
+    "PageSizeSelect": {
+      "Primary": "#w1 > div.clearfix.filter-group-btn > div.pull-right > select",
+      "Fallback": "/html/body/div[1]/div/div[2]/form/div[4]/div[2]/select"
+    },
+    "ApplyButton": {
+      "Primary": "#w1 > div.clearfix.filter-group-btn > div.pull-left > button.btn.btn-primary",
+      "Fallback": "/html/body/div[1]/div/div[2]/form/div[4]/div[1]/button[1]"
+    },
+    "Table": {
+      "Container": "#w2-container > table",
+      "Row": "#w2-container > table > tbody > tr",
+      "RowKey": "td:nth-child(2) > a",
+      "Summary": "#w2 > div.summary"
+    },
+    "Fields": {
+      "Fio": "td:nth-child(4) > a",
+      "Phone": "td:nth-child(5)",
+      "Timezone": "td:nth-child(12) > span",
+      "DaysOverdue": "td:nth-child(7)",
+      "ContractStatusText": "td:nth-child(16)"
+    },
+    "ContractBlueFlag": {
+      "Selector": "td:nth-child(2)",
+      "ClassContains": "bg-info w2"
+    },
+    "ClientLink": {
+      "Selector": "td:nth-child(4) > a",
+      "Attr": "href"
+    },
+    "Pagination": {
+      "NextPage": "#w2 > ul > li.next > a",
+      "DisabledClassContains": "disabled"
+    }
+  },
+  "ClientCard": {
+    "TotalWithCommission": {
+      "Primary": "#w0 > tbody > tr:nth-child(6) > td",
+      "Fallback": "/html/body/div[1]/div/div[2]/div[3]/div[2]/div[1]/div[1]/table/tbody/tr[6]/td"
+    }
+  }
+}

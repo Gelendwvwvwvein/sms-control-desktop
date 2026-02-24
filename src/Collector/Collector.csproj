@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="..\WebUiMock\index.html" LogicalName="Collector.WebUi.index.html" />
+    <EmbeddedResource Include="..\WebUiMock\app.js" LogicalName="Collector.WebUi.app.js" />
+    <EmbeddedResource Include="..\WebUiMock\styles.css" LogicalName="Collector.WebUi.styles.css" />
+    <EmbeddedResource Include="..\WebUiMock\uikit.js" LogicalName="Collector.WebUi.uikit.js" />
+    <EmbeddedResource Include="..\WebUiMock\favicon.svg" LogicalName="Collector.WebUi.favicon.svg" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.11">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.11" />
+    <PackageReference Include="Microsoft.Playwright" Version="1.46.0" />
+  </ItemGroup>
+</Project>
