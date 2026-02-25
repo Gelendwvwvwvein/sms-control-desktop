@@ -7,8 +7,12 @@ namespace Collector.Api;
 
 public sealed partial class TemplateService
 {
+    public const string OverdueModeRange = "range";
+    public const string OverdueModeExact = "exact";
+
     private const string StatusDraft = "draft";
     private const string StatusActive = "active";
+    private const string KindFallback = "custom";
 
     private static readonly HashSet<string> RequiredTokens = new(StringComparer.Ordinal)
     {
@@ -22,98 +26,52 @@ public sealed partial class TemplateService
         StatusActive
     };
 
-    private static readonly IReadOnlyList<TemplateTypeMetaDto> TypeMeta =
-    [
-        new TemplateTypeMetaDto
-        {
-            Kind = "sms1",
-            Label = "СМС 1",
-            RangeText = "3-5 дней",
-            MinOverdueDays = 3,
-            MaxOverdueDays = 5,
-            AutoAssign = true,
-            RuleHint = "Первичное сообщение: только клиенты с просрочкой 3-5 дней.",
-            SortOrder = 10
-        },
-        new TemplateTypeMetaDto
-        {
-            Kind = "sms1_regular",
-            Label = "СМС 1 (постоянный клиент)",
-            RangeText = "3-5 дней",
-            MinOverdueDays = 3,
-            MaxOverdueDays = 5,
-            AutoAssign = false,
-            RuleHint = "Вариант для постоянных клиентов. В автоподбор не включается, назначается вручную.",
-            SortOrder = 20
-        },
-        new TemplateTypeMetaDto
-        {
-            Kind = "sms2",
-            Label = "СМС 2",
-            RangeText = "6-20 дней",
-            MinOverdueDays = 6,
-            MaxOverdueDays = 20,
-            AutoAssign = true,
-            RuleHint = "Повторное сообщение: для клиентов с просрочкой 6-20 дней.",
-            SortOrder = 30
-        },
-        new TemplateTypeMetaDto
-        {
-            Kind = "sms3",
-            Label = "СМС 3",
-            RangeText = "21-29 дней",
-            MinOverdueDays = 21,
-            MaxOverdueDays = 29,
-            AutoAssign = true,
-            RuleHint = "Третье сообщение до этапа КА: для клиентов с просрочкой 21-29 дней.",
-            SortOrder = 40
-        },
-        new TemplateTypeMetaDto
-        {
-            Kind = "ka1",
-            Label = "СМС от КА1",
-            RangeText = "30-45 дней",
-            MinOverdueDays = 30,
-            MaxOverdueDays = 45,
-            AutoAssign = true,
-            RuleHint = "Первое сообщение от КА: клиенты с просрочкой 30-45 дней.",
-            SortOrder = 50
-        },
-        new TemplateTypeMetaDto
-        {
-            Kind = "ka2",
-            Label = "СМС от КА2",
-            RangeText = "46-50 дней",
-            MinOverdueDays = 46,
-            MaxOverdueDays = 50,
-            AutoAssign = true,
-            RuleHint = "Повторное сообщение от КА: клиенты с просрочкой 46-50 дней.",
-            SortOrder = 60
-        },
-        new TemplateTypeMetaDto
-        {
-            Kind = "ka_final",
-            Label = "СМС от КА (финал)",
-            RangeText = "51-59 дней",
-            MinOverdueDays = 51,
-            MaxOverdueDays = 59,
-            AutoAssign = true,
-            RuleHint = "Финальное сообщение КА: клиенты с просрочкой 51-59 дней.",
-            SortOrder = 70
-        }
-    ];
+    private static readonly HashSet<string> AllowedOverdueModes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        OverdueModeRange,
+        OverdueModeExact
+    };
 
-    private static readonly IReadOnlyDictionary<string, TemplateTypeMetaDto> TypeMetaByKind =
-        TypeMeta.ToDictionary(x => x.Kind, StringComparer.OrdinalIgnoreCase);
+    private static readonly IReadOnlyDictionary<string, LegacyTemplateDefaults> LegacyDefaultsByKind =
+        new Dictionary<string, LegacyTemplateDefaults>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["sms1"] = new LegacyTemplateDefaults("СМС 1", "Старый тип шаблона", 3, 5, true, "смс2", 10),
+            ["sms1_regular"] = new LegacyTemplateDefaults("СМС 1 (постоянный клиент)", "Старый тип шаблона", 3, 5, false, "смс2", 20),
+            ["sms2"] = new LegacyTemplateDefaults("СМС 2", "Старый тип шаблона", 6, 20, true, "смс2", 30),
+            ["sms3"] = new LegacyTemplateDefaults("СМС 3", "Старый тип шаблона", 21, 29, true, "смс3", 40),
+            ["ka1"] = new LegacyTemplateDefaults("СМС от КА1", "Старый тип шаблона", 30, 45, true, "смс от ка", 50),
+            ["ka2"] = new LegacyTemplateDefaults("СМС от КА2", "Старый тип шаблона", 46, 50, true, "смс ка{n}", 60),
+            ["ka_final"] = new LegacyTemplateDefaults("СМС от КА (финал)", "Старый тип шаблона", 51, 59, true, "смс ка фин", 70)
+        };
+
+    private static readonly IReadOnlyList<TemplateTypeMetaDto> TypeMeta =
+        LegacyDefaultsByKind
+            .Select(x => new TemplateTypeMetaDto
+            {
+                Kind = x.Key,
+                Label = x.Value.Label,
+                Description = x.Value.Description,
+                RuleHint = $"Старый preset: {x.Value.RangeFrom}-{x.Value.RangeTo} дней.",
+                SortOrder = x.Value.SortOrder
+            })
+            .OrderBy(x => x.SortOrder)
+            .ToList();
 
     public static IReadOnlyList<TemplateTypeMetaDto> GetMeta() => TypeMeta;
 
-    public static bool IsTemplateEligibleForOverdue(string? kind, int daysOverdue)
+    public static bool IsTemplateEligibleForOverdue(TemplateRecord template, int daysOverdue, bool allowManualOnly = false)
     {
-        var normalizedKind = (kind ?? string.Empty).Trim().ToLowerInvariant();
-        if (string.IsNullOrEmpty(normalizedKind)) return false;
-        if (!TypeMetaByKind.TryGetValue(normalizedKind, out var meta)) return false;
-        return daysOverdue >= meta.MinOverdueDays && daysOverdue <= meta.MaxOverdueDays;
+        if (!template.AutoAssign)
+        {
+            return allowManualOnly;
+        }
+
+        return IsOverdueRuleMatch(
+            template.OverdueMode,
+            template.OverdueFromDays,
+            template.OverdueToDays,
+            template.OverdueExactDay,
+            daysOverdue);
     }
 
     public async Task<List<TemplateDto>> ListAsync(AppDbContext db, string? status, CancellationToken cancellationToken)
@@ -147,10 +105,19 @@ public sealed partial class TemplateService
     public async Task<TemplateDto> CreateAsync(AppDbContext db, TemplateUpsertRequest payload, CancellationToken cancellationToken)
     {
         var now = DateTime.UtcNow;
+        var normalizedKind = NormalizeKind(payload.Kind);
+        var rule = ResolveOverdueRule(payload, normalizedKind);
+        var resolvedAutoAssign = ResolveAutoAssign(payload.AutoAssign, normalizedKind);
         var record = new TemplateRecord
         {
             Name = payload.Name.Trim(),
-            Kind = NormalizeKind(payload.Kind),
+            Kind = normalizedKind,
+            OverdueMode = rule.Mode,
+            OverdueFromDays = rule.FromDays,
+            OverdueToDays = rule.ToDays,
+            OverdueExactDay = rule.ExactDay,
+            AutoAssign = resolvedAutoAssign,
+            CommentText = NormalizeCommentText(payload.CommentText, normalizedKind),
             Status = NormalizeStatus(payload.Status),
             Text = payload.Text.Trim(),
             CreatedAtUtc = now,
@@ -168,8 +135,18 @@ public sealed partial class TemplateService
         var record = await db.Templates.FirstOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (record is null) return null;
 
+        var normalizedKind = NormalizeKind(payload.Kind);
+        var rule = ResolveOverdueRule(payload, normalizedKind);
+        var resolvedAutoAssign = ResolveAutoAssign(payload.AutoAssign, normalizedKind);
+
         record.Name = payload.Name.Trim();
-        record.Kind = NormalizeKind(payload.Kind);
+        record.Kind = normalizedKind;
+        record.OverdueMode = rule.Mode;
+        record.OverdueFromDays = rule.FromDays;
+        record.OverdueToDays = rule.ToDays;
+        record.OverdueExactDay = rule.ExactDay;
+        record.AutoAssign = resolvedAutoAssign;
+        record.CommentText = NormalizeCommentText(payload.CommentText, normalizedKind);
         record.Status = NormalizeStatus(payload.Status);
         record.Text = payload.Text.Trim();
         record.UpdatedAtUtc = DateTime.UtcNow;
@@ -206,27 +183,13 @@ public sealed partial class TemplateService
             return new ApiErrorDto { Code = "TEMPLATE_NAME_REQUIRED", Message = "Название шаблона обязательно." };
         }
 
-        if (string.IsNullOrWhiteSpace(payload.Kind))
-        {
-            return new ApiErrorDto { Code = "TEMPLATE_KIND_REQUIRED", Message = "Тип шаблона обязателен." };
-        }
-
-        var normalizedKind = NormalizeKind(payload.Kind);
-        if (!TypeMetaByKind.ContainsKey(normalizedKind))
-        {
-            return new ApiErrorDto
-            {
-                Code = "TEMPLATE_KIND_INVALID",
-                Message = $"Неизвестный тип шаблона: '{payload.Kind}'."
-            };
-        }
-
         if (string.IsNullOrWhiteSpace(payload.Status))
         {
             return new ApiErrorDto { Code = "TEMPLATE_STATUS_REQUIRED", Message = "Статус шаблона обязателен." };
         }
 
-        if (!AllowedStatuses.Contains(payload.Status.Trim()))
+        var normalizedStatus = payload.Status.Trim().ToLowerInvariant();
+        if (!AllowedStatuses.Contains(normalizedStatus))
         {
             return new ApiErrorDto
             {
@@ -244,6 +207,23 @@ public sealed partial class TemplateService
         if (tokenValidationError is not null)
         {
             return tokenValidationError;
+        }
+
+        var normalizedKind = NormalizeKind(payload.Kind);
+        var modeValidation = ValidateOverdueRule(payload, normalizedKind);
+        if (modeValidation is not null)
+        {
+            return modeValidation;
+        }
+
+        var normalizedComment = NormalizeCommentText(payload.CommentText, normalizedKind);
+        if (normalizedStatus == StatusActive && string.IsNullOrWhiteSpace(normalizedComment))
+        {
+            return new ApiErrorDto
+            {
+                Code = "TEMPLATE_COMMENT_REQUIRED",
+                Message = "Для активного шаблона заполните комментарий, который пишется в договор после отправки."
+            };
         }
 
         return null;
@@ -312,11 +292,95 @@ public sealed partial class TemplateService
         return null;
     }
 
+    private static ApiErrorDto? ValidateOverdueRule(TemplateUpsertRequest payload, string normalizedKind)
+    {
+        try
+        {
+            _ = ResolveOverdueRule(payload, normalizedKind);
+            return null;
+        }
+        catch (ArgumentException ex)
+        {
+            return new ApiErrorDto
+            {
+                Code = "TEMPLATE_OVERDUE_RULE_INVALID",
+                Message = ex.Message
+            };
+        }
+    }
+
+    private static OverdueRule ResolveOverdueRule(TemplateUpsertRequest payload, string normalizedKind)
+    {
+        var from = payload.OverdueFromDays;
+        var to = payload.OverdueToDays;
+        var exact = payload.OverdueExactDay;
+
+        var mode = NormalizeOverdueMode(payload.OverdueMode, allowEmpty: true);
+        if (string.IsNullOrWhiteSpace(mode))
+        {
+            mode = exact.HasValue ? OverdueModeExact : (from.HasValue || to.HasValue ? OverdueModeRange : string.Empty);
+        }
+
+        if (string.IsNullOrWhiteSpace(mode))
+        {
+            var defaults = TryGetLegacyDefaults(normalizedKind);
+            if (defaults is not null)
+            {
+                return new OverdueRule(OverdueModeRange, defaults.RangeFrom, defaults.RangeTo, null);
+            }
+
+            throw new ArgumentException("Укажите правило просрочки: диапазон или точный день.");
+        }
+
+        if (!AllowedOverdueModes.Contains(mode))
+        {
+            throw new ArgumentException("Режим правила просрочки должен быть 'range' или 'exact'.");
+        }
+
+        if (mode == OverdueModeExact)
+        {
+            if (!exact.HasValue)
+            {
+                throw new ArgumentException("Для режима 'exact' нужно указать точный день просрочки.");
+            }
+
+            if (exact.Value < 0)
+            {
+                throw new ArgumentException("Точный день просрочки должен быть числом >= 0.");
+            }
+
+            return new OverdueRule(OverdueModeExact, null, null, exact.Value);
+        }
+
+        if (!from.HasValue || !to.HasValue)
+        {
+            var defaults = TryGetLegacyDefaults(normalizedKind);
+            if (defaults is not null)
+            {
+                return new OverdueRule(OverdueModeRange, defaults.RangeFrom, defaults.RangeTo, null);
+            }
+
+            throw new ArgumentException("Для режима 'range' нужно указать оба значения: от и до.");
+        }
+
+        if (from.Value < 0 || to.Value < 0)
+        {
+            throw new ArgumentException("Диапазон просрочки должен быть в пределах >= 0.");
+        }
+
+        if (to.Value < from.Value)
+        {
+            throw new ArgumentException("В диапазоне просрочки значение 'до' не может быть меньше значения 'от'.");
+        }
+
+        return new OverdueRule(OverdueModeRange, from.Value, to.Value, null);
+    }
+
     private static int GetSortOrder(string kind)
     {
-        if (TypeMetaByKind.TryGetValue(kind, out var meta))
+        if (TryGetLegacyDefaults(kind) is { } defaults)
         {
-            return meta.SortOrder;
+            return defaults.SortOrder;
         }
 
         return int.MaxValue;
@@ -325,18 +389,32 @@ public sealed partial class TemplateService
     private static TemplateDto MapToDto(TemplateRecord record)
     {
         var kind = NormalizeKind(record.Kind);
-        TypeMetaByKind.TryGetValue(kind, out var meta);
+        var mode = NormalizeOverdueMode(record.OverdueMode);
+        var defaults = TryGetLegacyDefaults(kind);
+        var fromDays = mode == OverdueModeRange
+            ? record.OverdueFromDays ?? defaults?.RangeFrom
+            : null;
+        var toDays = mode == OverdueModeRange
+            ? record.OverdueToDays ?? defaults?.RangeTo
+            : null;
+        var exactDay = mode == OverdueModeExact
+            ? record.OverdueExactDay
+            : null;
+        var commentText = NormalizeCommentText(record.CommentText, kind);
 
         return new TemplateDto
         {
             Id = record.Id,
             Name = record.Name,
             Kind = kind,
-            KindLabel = meta?.Label ?? kind,
-            RangeText = meta?.RangeText ?? string.Empty,
-            MinOverdueDays = meta?.MinOverdueDays ?? 0,
-            MaxOverdueDays = meta?.MaxOverdueDays ?? 0,
-            AutoAssign = meta?.AutoAssign ?? false,
+            KindLabel = defaults?.Label ?? kind,
+            OverdueMode = mode,
+            OverdueFromDays = fromDays,
+            OverdueToDays = toDays,
+            OverdueExactDay = exactDay,
+            OverdueText = BuildOverdueText(mode, fromDays, toDays, exactDay),
+            AutoAssign = record.AutoAssign,
+            CommentText = commentText,
             Status = NormalizeStatus(record.Status),
             Text = record.Text,
             CreatedAtUtc = record.CreatedAtUtc,
@@ -344,9 +422,87 @@ public sealed partial class TemplateService
         };
     }
 
+    private static string BuildOverdueText(
+        string mode,
+        int? fromDays,
+        int? toDays,
+        int? exactDay)
+    {
+        if (string.Equals(mode, OverdueModeExact, StringComparison.OrdinalIgnoreCase) && exactDay.HasValue)
+        {
+            return $"Точный день: {exactDay.Value}";
+        }
+
+        if (fromDays.HasValue && toDays.HasValue)
+        {
+            return $"Диапазон: {fromDays.Value}-{toDays.Value}";
+        }
+
+        return "Не задано";
+    }
+
+    private static bool IsOverdueRuleMatch(
+        string? modeRaw,
+        int? fromDays,
+        int? toDays,
+        int? exactDay,
+        int daysOverdue)
+    {
+        var mode = NormalizeOverdueMode(modeRaw);
+        if (mode == OverdueModeExact)
+        {
+            return exactDay.HasValue && exactDay.Value == daysOverdue;
+        }
+
+        if (!fromDays.HasValue || !toDays.HasValue)
+        {
+            return false;
+        }
+
+        return daysOverdue >= fromDays.Value && daysOverdue <= toDays.Value;
+    }
+
+    private static LegacyTemplateDefaults? TryGetLegacyDefaults(string kind)
+    {
+        return LegacyDefaultsByKind.TryGetValue(kind, out var defaults) ? defaults : null;
+    }
+
     private static string NormalizeKind(string? kind)
     {
-        return (kind ?? string.Empty).Trim().ToLowerInvariant();
+        var value = (kind ?? string.Empty).Trim().ToLowerInvariant();
+        return string.IsNullOrWhiteSpace(value) ? KindFallback : value;
+    }
+
+    private static string NormalizeCommentText(string? value, string normalizedKind)
+    {
+        var text = (value ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            return text;
+        }
+
+        return TryGetLegacyDefaults(normalizedKind)?.DefaultComment ?? string.Empty;
+    }
+
+    private static bool ResolveAutoAssign(bool? autoAssign, string normalizedKind)
+    {
+        if (autoAssign.HasValue)
+        {
+            return autoAssign.Value;
+        }
+
+        return TryGetLegacyDefaults(normalizedKind)?.AutoAssign ?? true;
+    }
+
+    private static string NormalizeOverdueMode(string? mode, bool allowEmpty = false)
+    {
+        var value = (mode ?? string.Empty).Trim().ToLowerInvariant();
+        if (allowEmpty && string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return value == OverdueModeExact ? OverdueModeExact : OverdueModeRange;
     }
 
     private static string NormalizeStatus(string? status, bool allowEmpty = false)
@@ -367,4 +523,28 @@ public sealed partial class TemplateService
 
     [GeneratedRegex(@"\{[^{}]+\}", RegexOptions.CultureInvariant)]
     private static partial Regex TemplateTokenRegex();
+
+    private sealed class LegacyTemplateDefaults(
+        string label,
+        string description,
+        int rangeFrom,
+        int rangeTo,
+        bool autoAssign,
+        string defaultComment,
+        int sortOrder)
+    {
+        public string Label { get; } = label;
+        public string Description { get; } = description;
+        public int RangeFrom { get; } = rangeFrom;
+        public int RangeTo { get; } = rangeTo;
+        public bool AutoAssign { get; } = autoAssign;
+        public string DefaultComment { get; } = defaultComment;
+        public int SortOrder { get; } = sortOrder;
+    }
+
+    private readonly record struct OverdueRule(
+        string Mode,
+        int? FromDays,
+        int? ToDays,
+        int? ExactDay);
 }

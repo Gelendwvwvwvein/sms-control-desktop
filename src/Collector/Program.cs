@@ -272,26 +272,49 @@ static void ConfigureBundledPlaywrightBrowsers()
 {
     const string browsersEnvVar = "PLAYWRIGHT_BROWSERS_PATH";
     const string driverEnvVar = "PLAYWRIGHT_DRIVER_SEARCH_PATH";
+    var bundledBrowsersPath = Path.Combine(AppContext.BaseDirectory, "ms-playwright");
+    var bundledDriverRoot = Path.Combine(AppContext.BaseDirectory, ".playwright");
 
     var existingBrowsers = Environment.GetEnvironmentVariable(browsersEnvVar);
-    if (string.IsNullOrWhiteSpace(existingBrowsers))
+    if (Directory.Exists(bundledBrowsersPath))
     {
-        var bundledBrowsersPath = Path.Combine(AppContext.BaseDirectory, "ms-playwright");
-        if (Directory.Exists(bundledBrowsersPath))
+        if (string.IsNullOrWhiteSpace(existingBrowsers) || !Directory.Exists(existingBrowsers))
         {
             Environment.SetEnvironmentVariable(browsersEnvVar, bundledBrowsersPath);
         }
     }
 
     var existingDriver = Environment.GetEnvironmentVariable(driverEnvVar);
-    if (string.IsNullOrWhiteSpace(existingDriver))
+    if (Directory.Exists(bundledDriverRoot))
     {
-        var bundledDriverRoot = Path.Combine(AppContext.BaseDirectory, ".playwright");
-        if (Directory.Exists(bundledDriverRoot))
+        if (string.IsNullOrWhiteSpace(existingDriver) || !HasPlaywrightDriverLayout(existingDriver))
         {
             Environment.SetEnvironmentVariable(driverEnvVar, AppContext.BaseDirectory);
         }
     }
+}
+
+static bool HasPlaywrightDriverLayout(string? searchPath)
+{
+    if (string.IsNullOrWhiteSpace(searchPath))
+    {
+        return false;
+    }
+
+    var trimmed = searchPath.Trim();
+    return HasPlaywrightDriverLayoutAt(trimmed) ||
+           HasPlaywrightDriverLayoutAt(Path.Combine(trimmed, ".playwright"));
+}
+
+static bool HasPlaywrightDriverLayoutAt(string rootPath)
+{
+    if (!Directory.Exists(rootPath))
+    {
+        return false;
+    }
+
+    return File.Exists(Path.Combine(rootPath, "package", "cli.js")) &&
+           Directory.Exists(Path.Combine(rootPath, "node"));
 }
 
 static async Task LaunchDesktopAsync(string[] args)

@@ -19,6 +19,19 @@ public sealed class AppSettingsDto
     public string WorkWindowStart { get; set; } = "08:00";
     public string WorkWindowEnd { get; set; } = "21:00";
     public CommentRulesDto CommentRules { get; set; } = new();
+    public List<TemplateRuleTypeDto> TemplateRuleTypes { get; set; } = [];
+}
+
+public sealed class TemplateRuleTypeDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string OverdueMode { get; set; } = "range";
+    public int? OverdueFromDays { get; set; }
+    public int? OverdueToDays { get; set; }
+    public int? OverdueExactDay { get; set; }
+    public bool AutoAssign { get; set; } = true;
+    public int SortOrder { get; set; }
 }
 
 public sealed class ApiErrorDto

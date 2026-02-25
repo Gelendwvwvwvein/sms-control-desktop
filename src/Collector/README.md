@@ -140,10 +140,11 @@ dotnet run --project src/Collector/Collector.csproj -- --output "out/clients.jso
     - after successful send or health-check of channel, active channel alerts are auto-resolved.
   - Dispatcher delivery mode:
     - dispatcher sends real SMS via Traccar endpoint/token for `sourceMode=live`;
-    - `queue/build` pre-fills `run_jobs.template_id` by overdue range from active templates;
-    - if `templateId` is empty, template is auto-picked by overdue range from active templates;
+    - `queue/build` pre-fills `run_jobs.template_id` по правилу просрочки активного шаблона (`range` или `exact`);
+    - if `templateId` is empty, template is auto-picked by its overdue rule from active templates (`autoAssign=true`);
     - if active templates are missing/incompatible, задача получает ошибку `TEMPLATE_NOT_RESOLVED`/`TEMPLATE_RENDER_EMPTY` и не отправляется;
     - tokens `{полное_фио}` and `{сумма_долга}` are rendered before send (`сумма_долга` = `итого + 2000`, rounding to nearest 1000, midpoint up);
+    - комментарий в договор после успешной отправки берется из `commentText` выбранного шаблона;
     - delivery pipeline включает рендер шаблона, назначение канала, retry/failover и алерты.
   - Debt cache:
     - `POST /api/clients/{externalClientId}/debt/fetch` reads exact debt from Rocketman card and stores it in `client_debt_cache`;

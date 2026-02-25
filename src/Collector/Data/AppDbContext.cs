@@ -72,12 +72,19 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
             entity.Property(x => x.Id).HasColumnName("id");
             entity.Property(x => x.Name).HasColumnName("name").HasMaxLength(256);
             entity.Property(x => x.Kind).HasColumnName("kind").HasMaxLength(64);
+            entity.Property(x => x.OverdueMode).HasColumnName("overdue_mode").HasMaxLength(16);
+            entity.Property(x => x.OverdueFromDays).HasColumnName("overdue_from_days");
+            entity.Property(x => x.OverdueToDays).HasColumnName("overdue_to_days");
+            entity.Property(x => x.OverdueExactDay).HasColumnName("overdue_exact_day");
+            entity.Property(x => x.AutoAssign).HasColumnName("auto_assign");
+            entity.Property(x => x.CommentText).HasColumnName("comment_text");
             entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(32);
             entity.Property(x => x.Text).HasColumnName("text");
             entity.Property(x => x.CreatedAtUtc).HasColumnName("created_at_utc");
             entity.Property(x => x.UpdatedAtUtc).HasColumnName("updated_at_utc");
             entity.HasIndex(x => x.Kind);
             entity.HasIndex(x => x.Status);
+            entity.HasIndex(x => new { x.Status, x.AutoAssign });
         });
 
         modelBuilder.Entity<ManualReplyPresetRecord>(entity =>

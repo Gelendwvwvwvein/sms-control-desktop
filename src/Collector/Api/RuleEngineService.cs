@@ -90,24 +90,27 @@ public sealed class RuleEngineService
 
     private static TemplateRecord? ResolveAutoTemplate(IReadOnlyList<TemplateRecord> activeTemplates, int daysOverdue)
     {
-        foreach (var meta in TemplateService.GetMeta()
-                     .Where(x => x.AutoAssign)
-                     .OrderBy(x => x.SortOrder))
-        {
-            if (daysOverdue < meta.MinOverdueDays || daysOverdue > meta.MaxOverdueDays)
-            {
-                continue;
-            }
+        return activeTemplates
+            .Where(x => TemplateService.IsTemplateEligibleForOverdue(x, daysOverdue))
+            .OrderBy(x => GetRulePriority(x))
+            .ThenBy(x => x.Id)
+            .FirstOrDefault();
+    }
 
-            var template = activeTemplates.FirstOrDefault(x =>
-                string.Equals(x.Kind, meta.Kind, StringComparison.OrdinalIgnoreCase));
-            if (template is not null)
-            {
-                return template;
-            }
+    private static int GetRulePriority(TemplateRecord template)
+    {
+        var mode = (template.OverdueMode ?? string.Empty).Trim().ToLowerInvariant();
+        if (mode == TemplateService.OverdueModeExact)
+        {
+            return 0;
         }
 
-        return null;
+        if (template.OverdueFromDays.HasValue && template.OverdueToDays.HasValue)
+        {
+            return Math.Max(1, template.OverdueToDays.Value - template.OverdueFromDays.Value + 1);
+        }
+
+        return int.MaxValue;
     }
 
     private static string RenderTemplateText(string templateText, string fullFio, string debtText)

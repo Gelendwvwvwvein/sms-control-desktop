@@ -608,9 +608,9 @@ public sealed partial class QueueService(RuleEngineService ruleEngine)
         var toUpdate = new List<RunJobRecord>();
         foreach (var job in jobs)
         {
-            if (!TemplateService.IsTemplateEligibleForOverdue(template.Kind, job.DaysOverdue))
+            if (!TemplateService.IsTemplateEligibleForOverdue(template, job.DaysOverdue, allowManualOnly: true))
             {
-                skippedReasons.Add($"job #{job.Id}: шаблон «{template.Kind}» не подходит для просрочки {job.DaysOverdue} дней");
+                skippedReasons.Add($"job #{job.Id}: шаблон «{template.Name}» не подходит для просрочки {job.DaysOverdue} дней");
                 continue;
             }
             job.TemplateId = payload.TemplateId;

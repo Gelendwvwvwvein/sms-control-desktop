@@ -1996,6 +1996,115 @@ public static class ApiHost
             };
         }
 
+        if (payload.TemplateRuleTypes is null || payload.TemplateRuleTypes.Count == 0)
+        {
+            return new ApiErrorDto
+            {
+                Code = "CFG_TEMPLATE_RULE_TYPES_REQUIRED",
+                Message = "Нужно передать хотя бы один тип шаблона."
+            };
+        }
+
+        var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in payload.TemplateRuleTypes)
+        {
+            if (item is null)
+            {
+                return new ApiErrorDto
+                {
+                    Code = "CFG_TEMPLATE_RULE_TYPE_INVALID",
+                    Message = "Тип шаблона не может быть пустым."
+                };
+            }
+
+            var id = (item.Id ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                return new ApiErrorDto
+                {
+                    Code = "CFG_TEMPLATE_RULE_TYPE_ID_REQUIRED",
+                    Message = "У каждого типа шаблона должен быть id."
+                };
+            }
+
+            if (!usedIds.Add(id))
+            {
+                return new ApiErrorDto
+                {
+                    Code = "CFG_TEMPLATE_RULE_TYPE_ID_DUPLICATE",
+                    Message = $"Найден дубликат id типа шаблона: {id}."
+                };
+            }
+
+            if (string.IsNullOrWhiteSpace(item.Name))
+            {
+                return new ApiErrorDto
+                {
+                    Code = "CFG_TEMPLATE_RULE_TYPE_NAME_REQUIRED",
+                    Message = $"Для типа «{id}» не задано название."
+                };
+            }
+
+            var manualOnly = item.AutoAssign == false;
+            if (manualOnly)
+            {
+                continue;
+            }
+
+            var modeRaw = (item.OverdueMode ?? string.Empty).Trim().ToLowerInvariant();
+            var mode = string.IsNullOrWhiteSpace(modeRaw)
+                ? TemplateService.OverdueModeRange
+                : modeRaw;
+            if (mode != TemplateService.OverdueModeRange && mode != TemplateService.OverdueModeExact)
+            {
+                return new ApiErrorDto
+                {
+                    Code = "CFG_TEMPLATE_RULE_TYPE_MODE_INVALID",
+                    Message = $"Для типа «{item.Name}» режим должен быть '{TemplateService.OverdueModeRange}' или '{TemplateService.OverdueModeExact}'."
+                };
+            }
+            if (mode == TemplateService.OverdueModeExact)
+            {
+                if (!item.OverdueExactDay.HasValue || item.OverdueExactDay.Value < 0)
+                {
+                    return new ApiErrorDto
+                    {
+                        Code = "CFG_TEMPLATE_RULE_TYPE_EXACT_INVALID",
+                        Message = $"Для типа «{item.Name}» в режиме exact нужно указать день >= 0."
+                    };
+                }
+
+                continue;
+            }
+
+            if (!item.OverdueFromDays.HasValue || !item.OverdueToDays.HasValue)
+            {
+                return new ApiErrorDto
+                {
+                    Code = "CFG_TEMPLATE_RULE_TYPE_RANGE_REQUIRED",
+                    Message = $"Для типа «{item.Name}» в режиме range нужно указать «от» и «до»."
+                };
+            }
+
+            if (item.OverdueFromDays.Value < 0 || item.OverdueToDays.Value < 0)
+            {
+                return new ApiErrorDto
+                {
+                    Code = "CFG_TEMPLATE_RULE_TYPE_RANGE_INVALID",
+                    Message = $"Для типа «{item.Name}» диапазон должен быть >= 0."
+                };
+            }
+
+            if (item.OverdueToDays.Value < item.OverdueFromDays.Value)
+            {
+                return new ApiErrorDto
+                {
+                    Code = "CFG_TEMPLATE_RULE_TYPE_RANGE_ORDER_INVALID",
+                    Message = $"Для типа «{item.Name}» значение «до» не может быть меньше «от»."
+                };
+            }
+        }
+
         return null;
     }
 

@@ -46,6 +46,8 @@ const MSK_UTC_OFFSET_MIN = 0;
 const DEFAULT_WORK_WINDOW_START = "08:00";
 const DEFAULT_WORK_WINDOW_END = "21:00";
 const ROCKETMAN_CARD_URL_PREFIX = "https://rocketman.ru/manager/collector-comment/view?id=";
+const DEFAULT_TEMPLATE_KIND = "sms1";
+const DEFAULT_TEMPLATE_OVERDUE_MODE = "range";
 const TEMPLATE_TYPE_ORDER = ["sms1", "sms1_regular", "sms2", "sms3", "ka1", "ka2", "ka_final"];
 const TEMPLATE_TYPE_CONFIG = {
   sms1: {
@@ -105,7 +107,26 @@ const TEMPLATE_TYPE_CONFIG = {
     ruleHint: "Финальное сообщение КА: клиенты с просрочкой 51-59 дней."
   }
 };
-const DEFAULT_TEMPLATE_KIND = "sms1";
+const DEFAULT_TEMPLATE_RULE_TYPES = TEMPLATE_TYPE_ORDER.map((kind, index) => {
+  const cfg = TEMPLATE_TYPE_CONFIG[kind];
+  return {
+    id: kind,
+    name: cfg.label,
+    overdueMode: DEFAULT_TEMPLATE_OVERDUE_MODE,
+    overdueFromDays: cfg.minOverdue,
+    overdueToDays: cfg.maxOverdue,
+    overdueExactDay: null,
+    autoAssign: cfg.autoAssign !== false,
+    sortOrder: (index + 1) * 10
+  };
+});
+const DEFAULT_COMMENT_RULES = {
+  sms2: "смс2",
+  sms3: "смс3",
+  ka1: "смс от ка",
+  kaN: "смс ка{n}",
+  kaFinal: "смс ка фин"
+};
 const DEFAULT_NEW_MANUAL_PRESET_TEXT = "{полное_фио}, добрый день. Уточните, пожалуйста, дату оплаты. Ориентировочная сумма {сумма_долга}.";
 
 const state = {
@@ -177,12 +198,19 @@ const state = {
   stoplist: [],
   alerts: [],
   alertView: "active",
-  commentRules: {
-    sms2: "смс2",
-    sms3: "смс3",
-    ka1: "смс от ка",
-    kaN: "смс ка{n}",
-    kaFinal: "смс ка фин"
+  commentRules: { ...DEFAULT_COMMENT_RULES },
+  templateRuleTypes: DEFAULT_TEMPLATE_RULE_TYPES.map((x) => ({ ...x })),
+  selectedTemplateRuleTypeId: null,
+  templateRuleTypeCreateMode: false,
+  templateRuleTypeCreateDraft: {
+    id: "",
+    name: "",
+    overdueMode: DEFAULT_TEMPLATE_OVERDUE_MODE,
+    overdueFromDays: 0,
+    overdueToDays: 0,
+    overdueExactDay: null,
+    autoAssign: true,
+    sortOrder: 0
   },
   runFilters: {
     tz: new Set([-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
@@ -208,12 +236,28 @@ const state = {
   templateCreateMode: false,
   templateCreateDraft: {
     kind: DEFAULT_TEMPLATE_KIND,
+    overdueMode: DEFAULT_TEMPLATE_OVERDUE_MODE,
+    overdueFromDays: DEFAULT_TEMPLATE_RULE_TYPES[0]?.overdueFromDays ?? 0,
+    overdueToDays: DEFAULT_TEMPLATE_RULE_TYPES[0]?.overdueToDays ?? 0,
+    overdueExactDay: null,
+    autoAssign: DEFAULT_TEMPLATE_RULE_TYPES[0]?.autoAssign !== false,
     name: "",
     text: ""
   },
-  templateEditorBaseline: { kind: DEFAULT_TEMPLATE_KIND, name: "", text: "" },
+  templateEditorBaseline: {
+    kind: DEFAULT_TEMPLATE_KIND,
+    overdueMode: DEFAULT_TEMPLATE_OVERDUE_MODE,
+    overdueFromDays: DEFAULT_TEMPLATE_RULE_TYPES[0]?.overdueFromDays ?? 0,
+    overdueToDays: DEFAULT_TEMPLATE_RULE_TYPES[0]?.overdueToDays ?? 0,
+    overdueExactDay: null,
+    autoAssign: DEFAULT_TEMPLATE_RULE_TYPES[0]?.autoAssign !== false,
+    name: "",
+    text: ""
+  },
+  settingsTemplateCommentTemplateId: null,
   selectedDialogId: null,
-  settingsBaseline: null
+  settingsBaseline: null,
+  bulkDebtInProgress: false
 };
 
 const titleMap = {
@@ -805,37 +849,360 @@ function overdueRange(days) {
   return "46-59";
 }
 
-function normalizeTemplateKind(kind) {
-  if (kind && TEMPLATE_TYPE_CONFIG[kind]) return kind;
-  return DEFAULT_TEMPLATE_KIND;
+function normalizeTemplateOverdueMode(mode) {
+  return String(mode || "").trim().toLowerCase() === "exact" ? "exact" : "range";
 }
 
-function getTemplateType(kind) {
-  return TEMPLATE_TYPE_CONFIG[normalizeTemplateKind(kind)];
+function parseTemplateOptionalInt(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.trunc(parsed);
 }
 
-function templateTypeLabel(kind) {
-  return getTemplateType(kind).label;
+function normalizeTemplateRuleTypeId(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
+  const chars = raw
+    .split("")
+    .map((ch) => ((/[a-z0-9_-]/).test(ch) ? ch : "_"));
+  let result = chars.join("");
+  while (result.includes("__")) {
+    result = result.replaceAll("__", "_");
+  }
+  return result.replace(/^_+|_+$/g, "");
 }
 
-function templateTypeRange(kind) {
-  return getTemplateType(kind).rangeText;
+function cloneTemplateRuleType(item) {
+  return {
+    id: item.id,
+    name: item.name,
+    overdueMode: item.overdueMode,
+    overdueFromDays: item.overdueFromDays,
+    overdueToDays: item.overdueToDays,
+    overdueExactDay: item.overdueExactDay,
+    autoAssign: item.autoAssign !== false,
+    sortOrder: item.sortOrder
+  };
 }
 
-function templateTypeRule(kind) {
-  return getTemplateType(kind).ruleHint;
+function normalizeTemplateRuleTypes(items) {
+  const source = Array.isArray(items) ? items : [];
+  const sorted = source
+    .filter((item) => item && typeof item === "object")
+    .sort((a, b) => {
+      const aOrder = Number.isFinite(Number(a.sortOrder)) ? Number(a.sortOrder) : Number.MAX_SAFE_INTEGER;
+      const bOrder = Number.isFinite(Number(b.sortOrder)) ? Number(b.sortOrder) : Number.MAX_SAFE_INTEGER;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      return String(a.name || "").localeCompare(String(b.name || ""), "ru");
+    });
+
+  const result = [];
+  const usedIds = new Set();
+  let fallbackOrder = 10;
+
+  sorted.forEach((item, index) => {
+    const baseId = normalizeTemplateRuleTypeId(item.id) || `type_${index + 1}`;
+    let resolvedId = baseId;
+    let suffix = 2;
+    while (usedIds.has(resolvedId)) {
+      resolvedId = `${baseId}_${suffix}`;
+      suffix += 1;
+    }
+    usedIds.add(resolvedId);
+
+    const autoAssign = item.autoAssign !== false;
+    const mode = autoAssign ? normalizeTemplateOverdueMode(item.overdueMode) : "range";
+    const resolvedSortOrder = Number.isFinite(Number(item.sortOrder)) && Number(item.sortOrder) > 0
+      ? Math.trunc(Number(item.sortOrder))
+      : fallbackOrder;
+    const normalized = {
+      id: resolvedId,
+      name: String(item.name || "").trim() || resolvedId,
+      overdueMode: mode,
+      overdueFromDays: null,
+      overdueToDays: null,
+      overdueExactDay: null,
+      autoAssign,
+      sortOrder: resolvedSortOrder
+    };
+
+    if (!autoAssign) {
+      normalized.overdueFromDays = 0;
+      normalized.overdueToDays = 0;
+    } else if (mode === "exact") {
+      normalized.overdueExactDay = Math.max(0, parseTemplateOptionalInt(item.overdueExactDay) ?? 0);
+    } else {
+      const from = Math.max(0, parseTemplateOptionalInt(item.overdueFromDays) ?? 0);
+      const to = Math.max(from, parseTemplateOptionalInt(item.overdueToDays) ?? from);
+      normalized.overdueFromDays = from;
+      normalized.overdueToDays = to;
+    }
+
+    fallbackOrder = resolvedSortOrder + 10;
+    result.push(normalized);
+  });
+
+  if (result.length === 0) {
+    return DEFAULT_TEMPLATE_RULE_TYPES.map(cloneTemplateRuleType);
+  }
+
+  return result
+    .sort((a, b) => {
+      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+      return String(a.name || "").localeCompare(String(b.name || ""), "ru");
+    })
+    .map(cloneTemplateRuleType);
+}
+
+function getTemplateRuleTypeById(kind) {
+  const normalized = normalizeTemplateRuleTypeId(kind);
+  if (!normalized) return null;
+  return state.templateRuleTypes.find((item) => item.id === normalized) || null;
+}
+
+function getDefaultTemplateRuleType() {
+  const fromState = getTemplateRuleTypeById(DEFAULT_TEMPLATE_KIND) || state.templateRuleTypes[0] || null;
+  if (fromState) {
+    return cloneTemplateRuleType(fromState);
+  }
+  const fallback = DEFAULT_TEMPLATE_RULE_TYPES.find((x) => x.id === DEFAULT_TEMPLATE_KIND) || DEFAULT_TEMPLATE_RULE_TYPES[0];
+  return cloneTemplateRuleType(fallback);
+}
+
+function normalizeTemplateKind(kind, options = {}) {
+  const { allowMissing = false } = options;
+  const normalized = normalizeTemplateRuleTypeId(kind);
+  if (normalized && getTemplateRuleTypeById(normalized)) {
+    return normalized;
+  }
+  if (allowMissing && normalized) {
+    return normalized;
+  }
+  return getDefaultTemplateRuleType().id || DEFAULT_TEMPLATE_KIND;
+}
+
+function getTemplateType(kind, options = {}) {
+  const { allowMissing = false, fallbackTemplate = null } = options;
+  const resolvedKind = normalizeTemplateKind(kind, { allowMissing });
+  const matched = getTemplateRuleTypeById(resolvedKind);
+
+  if (matched) {
+    const autoAssign = matched.autoAssign !== false;
+    const mode = autoAssign ? normalizeTemplateOverdueMode(matched.overdueMode) : "range";
+    const minOverdue = autoAssign
+      ? Math.max(0, parseTemplateOptionalInt(matched.overdueFromDays) ?? 0)
+      : 0;
+    const maxOverdue = autoAssign
+      ? Math.max(minOverdue, parseTemplateOptionalInt(matched.overdueToDays) ?? minOverdue)
+      : 0;
+    return {
+      ...cloneTemplateRuleType(matched),
+      label: matched.name,
+      overdueMode: mode,
+      overdueFromDays: minOverdue,
+      overdueToDays: maxOverdue,
+      overdueExactDay: autoAssign && mode === "exact"
+        ? Math.max(0, parseTemplateOptionalInt(matched.overdueExactDay) ?? 0)
+        : null,
+      autoAssign,
+      minOverdue,
+      maxOverdue,
+      exists: true
+    };
+  }
+
+  const fallbackType = getDefaultTemplateRuleType();
+  const fallbackMode = normalizeTemplateOverdueMode(fallbackType.overdueMode);
+  const fallbackFrom = Math.max(0, parseTemplateOptionalInt(fallbackType.overdueFromDays) ?? 0);
+  const fallbackTo = Math.max(fallbackFrom, parseTemplateOptionalInt(fallbackType.overdueToDays) ?? fallbackFrom);
+  const fallbackExact = Math.max(0, parseTemplateOptionalInt(fallbackType.overdueExactDay) ?? 0);
+
+  if (allowMissing && resolvedKind) {
+    const autoAssign = fallbackTemplate ? fallbackTemplate.autoAssign !== false : fallbackType.autoAssign !== false;
+    const sourceMode = fallbackTemplate ? normalizeTemplateOverdueMode(fallbackTemplate.overdueMode) : fallbackMode;
+    const mode = autoAssign ? sourceMode : "range";
+    const from = autoAssign
+      ? Math.max(0, parseTemplateOptionalInt(fallbackTemplate?.overdueFromDays) ?? fallbackFrom)
+      : 0;
+    const to = autoAssign
+      ? Math.max(from, parseTemplateOptionalInt(fallbackTemplate?.overdueToDays) ?? fallbackTo)
+      : 0;
+    const exact = autoAssign
+      ? Math.max(0, parseTemplateOptionalInt(fallbackTemplate?.overdueExactDay) ?? fallbackExact)
+      : null;
+    const label = String(kind || resolvedKind).trim() || resolvedKind;
+    return {
+      id: resolvedKind,
+      name: label,
+      label: `${label} (удален)`,
+      overdueMode: mode,
+      overdueFromDays: from,
+      overdueToDays: to,
+      overdueExactDay: mode === "exact" ? exact : null,
+      autoAssign,
+      sortOrder: Number.MAX_SAFE_INTEGER,
+      minOverdue: from,
+      maxOverdue: to,
+      exists: false
+    };
+  }
+
+  const fallbackAutoAssign = fallbackType.autoAssign !== false;
+  const fallbackResolvedMode = fallbackAutoAssign ? fallbackMode : "range";
+  const fallbackResolvedFrom = fallbackAutoAssign ? fallbackFrom : 0;
+  const fallbackResolvedTo = fallbackAutoAssign ? fallbackTo : 0;
+  return {
+    ...cloneTemplateRuleType(fallbackType),
+    label: fallbackType.name,
+    overdueMode: fallbackResolvedMode,
+    overdueFromDays: fallbackResolvedFrom,
+    overdueToDays: fallbackResolvedTo,
+    overdueExactDay: fallbackResolvedMode === "exact" ? fallbackExact : null,
+    autoAssign: fallbackAutoAssign,
+    minOverdue: fallbackResolvedFrom,
+    maxOverdue: fallbackResolvedTo,
+    exists: true
+  };
+}
+
+function templateTypeLabel(kind, options = {}) {
+  return getTemplateType(kind, {
+    allowMissing: options.allowMissing === true,
+    fallbackTemplate: options.fallbackTemplate || null
+  }).label;
+}
+
+function formatTemplateRuleTypeRule(type) {
+  if (type?.autoAssign === false) {
+    return "Только ручное назначение";
+  }
+  const mode = normalizeTemplateOverdueMode(type?.overdueMode);
+  if (mode === "exact") {
+    const exact = Math.max(0, parseTemplateOptionalInt(type?.overdueExactDay) ?? 0);
+    return `Точный день: ${exact}`;
+  }
+  const from = Math.max(0, parseTemplateOptionalInt(type?.overdueFromDays) ?? 0);
+  const to = Math.max(from, parseTemplateOptionalInt(type?.overdueToDays) ?? from);
+  return `Диапазон: ${from}-${to}`;
+}
+
+function templateTypeRule(kind, options = {}) {
+  const type = getTemplateType(kind, {
+    allowMissing: true,
+    fallbackTemplate: options.fallbackTemplate || null
+  });
+  if (type.exists === false) {
+    return `Тип «${type.name}» удален из настроек. Выберите актуальный тип и сохраните шаблон.`;
+  }
+  if (type.autoAssign === false) {
+    return `Тип «${type.name}». Только ручное назначение: в автоподборе очереди не участвует, правило просрочки не требуется.`;
+  }
+  return `Тип «${type.name}». ${formatTemplateRuleTypeRule(type)}. Тип участвует в автоподборе очереди.`;
 }
 
 function templateKindSortOrder(kind) {
-  const index = TEMPLATE_TYPE_ORDER.indexOf(normalizeTemplateKind(kind));
-  return index >= 0 ? index : Number.MAX_SAFE_INTEGER;
+  const type = getTemplateType(kind, { allowMissing: true });
+  return Number.isFinite(Number(type.sortOrder)) ? Number(type.sortOrder) : Number.MAX_SAFE_INTEGER;
 }
 
-function isTemplateEligibleForOverdue(kind, daysOverdue, options = {}) {
+function resolveTemplateRuleFields(template) {
+  const fallback = getTemplateType(template?.kind, { allowMissing: true, fallbackTemplate: template || null });
+  const mode = normalizeTemplateOverdueMode(template?.overdueMode || fallback.overdueMode);
+  const fromDays = parseTemplateOptionalInt(template?.overdueFromDays);
+  const toDays = parseTemplateOptionalInt(template?.overdueToDays);
+  const exactDay = parseTemplateOptionalInt(template?.overdueExactDay);
+  if (mode === "exact") {
+    return {
+      mode,
+      fromDays: null,
+      toDays: null,
+      exactDay: Math.max(0, exactDay ?? parseTemplateOptionalInt(fallback.overdueExactDay) ?? 0)
+    };
+  }
+
+  const fallbackFrom = Math.max(0, parseTemplateOptionalInt(fallback.overdueFromDays) ?? fallback.minOverdue ?? 0);
+  const fallbackTo = Math.max(fallbackFrom, parseTemplateOptionalInt(fallback.overdueToDays) ?? fallback.maxOverdue ?? fallbackFrom);
+  const resolvedFrom = Math.max(0, fromDays ?? fallbackFrom);
+  const resolvedTo = Math.max(resolvedFrom, toDays ?? fallbackTo);
+  return {
+    mode,
+    fromDays: resolvedFrom,
+    toDays: resolvedTo,
+    exactDay: null
+  };
+}
+
+function formatTemplateOverdueRule(template) {
+  if (isTemplateManualOnly(template)) {
+    return "Только ручное назначение";
+  }
+  const rule = resolveTemplateRuleFields(template);
+  if (rule.mode === "exact" && rule.exactDay !== null) {
+    return `Точный день: ${rule.exactDay}`;
+  }
+  return `Диапазон: ${rule.fromDays}-${rule.toDays}`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function toSingleLineText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function templateOptionLabel(template) {
+  if (!template) return "шаблон";
+  return `${templateTypeLabel(template.kind, { allowMissing: true, fallbackTemplate: template })}: ${template.name} (${formatTemplateOverdueRule(template)})`;
+}
+
+function templateCommentPreview(commentText, maxLength = 90) {
+  const singleLine = toSingleLineText(commentText);
+  if (!singleLine) return "";
+  if (singleLine.length <= maxLength) return singleLine;
+  return `${singleLine.slice(0, Math.max(1, maxLength - 1))}\u2026`;
+}
+
+function normalizeCommentRules(rules) {
+  const source = rules && typeof rules === "object" ? rules : {};
+  const pick = (key) => {
+    const fallback = DEFAULT_COMMENT_RULES[key];
+    const value = String(source[key] ?? "").trim();
+    return value || fallback;
+  };
+  return {
+    sms2: pick("sms2"),
+    sms3: pick("sms3"),
+    ka1: pick("ka1"),
+    kaN: pick("kaN"),
+    kaFinal: pick("kaFinal")
+  };
+}
+
+function isTemplateEligibleForOverdue(template, daysOverdue, options = {}) {
   const { allowManualOnly = false } = options;
-  const cfg = getTemplateType(kind);
-  if (!allowManualOnly && cfg.autoAssign === false) return false;
-  return daysOverdue >= cfg.minOverdue && daysOverdue <= cfg.maxOverdue;
+  if (!template) return false;
+  if (isTemplateManualOnly(template)) {
+    return allowManualOnly;
+  }
+
+  const rule = resolveTemplateRuleFields(template);
+  if (rule.mode === "exact") {
+    return rule.exactDay !== null && daysOverdue === rule.exactDay;
+  }
+  return daysOverdue >= rule.fromDays && daysOverdue <= rule.toDays;
+}
+
+function isTemplateManualOnly(template) {
+  if (!template) return false;
+  const kind = normalizeTemplateKind(template.kind, { allowMissing: true });
+  return resolveTemplateAutoAssignByKind(kind, { fallbackTemplate: template }) === false;
 }
 
 function cardUrlByClientId(clientId) {
@@ -994,12 +1361,30 @@ function mapAlertDtoToUi(item) {
 }
 
 function mapTemplateDtoToUi(item) {
+  const kind = normalizeTemplateKind(item.kind, { allowMissing: true });
+  const fallback = getTemplateType(kind, { allowMissing: true, fallbackTemplate: item || null });
+  const mode = normalizeTemplateOverdueMode(item.overdueMode || fallback.overdueMode);
+  const fromDays = parseTemplateOptionalInt(item.overdueFromDays);
+  const toDays = parseTemplateOptionalInt(item.overdueToDays);
+  const exactDay = parseTemplateOptionalInt(item.overdueExactDay);
+  const resolvedFrom = Math.max(0, fromDays ?? fallback.minOverdue ?? 0);
+  const resolvedTo = Math.max(resolvedFrom, toDays ?? fallback.maxOverdue ?? resolvedFrom);
+  const resolvedExact = Math.max(0, exactDay ?? parseTemplateOptionalInt(fallback.overdueExactDay) ?? 0);
   return {
     id: Number(item.id),
-    kind: normalizeTemplateKind(item.kind),
+    kind,
     status: String(item.status || "draft"),
     name: String(item.name || "").trim(),
-    text: String(item.text || "").trim()
+    text: String(item.text || "").trim(),
+    overdueMode: mode,
+    overdueFromDays: mode === "range" ? resolvedFrom : null,
+    overdueToDays: mode === "range" ? resolvedTo : null,
+    overdueExactDay: mode === "exact" ? resolvedExact : null,
+    overdueText: String(item.overdueText || "").trim() || (mode === "exact"
+      ? `Точный день: ${resolvedExact}`
+      : `Диапазон: ${resolvedFrom}-${resolvedTo}`),
+    autoAssign: fallback.autoAssign !== false,
+    commentText: String(item.commentText || "").trim()
   };
 }
 
@@ -1623,6 +2008,7 @@ function renderClientsBulkUi(visibleRows = getVisibleClientRows()) {
   const selectedRows = getSelectedClientRows();
   const selectedTotal = selectedRows.length;
   const selectedVisible = visibleIds.filter((id) => state.selectedClients.has(id)).length;
+  const selectedWithExternalId = selectedRows.filter((c) => String(c.externalClientId || "").trim() !== "").length;
   const returnableCount = selectedRows.filter((c) => state.excludedClientIds.has(c.id)).length;
   const selectedInStopList = selectedRows.filter((c) => isPhoneInStopList(c.phone)).length;
   const selectedOutStopList = selectedTotal - selectedInStopList;
@@ -1632,6 +2018,7 @@ function renderClientsBulkUi(visibleRows = getVisibleClientRows()) {
   $("clientsBulkMeta").textContent = `Выбрано: ${selectedTotal} (видимо: ${selectedVisible})`;
   $("clientsSelectVisible").disabled = !hasAnyRows;
   $("clientsClearSelection").disabled = selectedTotal === 0;
+  $("clientsBulkFetchDebt").disabled = selectedTotal === 0 || selectedWithExternalId === 0 || state.bulkDebtInProgress;
   $("clientsBulkAddStop").disabled = !canBulkAddToStopList;
   $("clientsBulkRemoveStop").disabled = !canBulkRemoveFromStopList;
   $("clientsBulkReturnPlan").disabled = selectedTotal === 0 || Boolean(state.runRuntime) || returnableCount === 0;
@@ -1648,11 +2035,13 @@ function renderQueueBulkUi(visibleRows = getVisibleQueueRows()) {
   const selectedRows = getSelectedQueueRows();
   const selectedTotal = selectedRows.length;
   const selectedVisible = visibleIds.filter((id) => state.selectedQueue.has(id)).length;
+  const selectedWithExternalId = selectedRows.filter((q) => String(q.externalClientId || "").trim() !== "").length;
   const removableFromPlan = selectedRows.filter((q) => ["queued", "retry"].includes(q.status)).length;
 
   $("queueBulkMeta").textContent = `Выбрано: ${selectedTotal} (видимо: ${selectedVisible})`;
   $("queueSelectVisible").disabled = !hasAnyRows;
   $("queueClearSelection").disabled = selectedTotal === 0;
+  $("queueBulkFetchDebt").disabled = selectedTotal === 0 || selectedWithExternalId === 0 || state.bulkDebtInProgress;
   $("queueBulkAddStop").disabled = selectedTotal === 0;
   $("queueBulkRemoveStop").disabled = selectedTotal === 0;
   $("queueBulkRemovePlan").disabled = selectedTotal === 0 || Boolean(state.runRuntime) || removableFromPlan === 0;
@@ -1673,7 +2062,7 @@ function renderQueueBulkUi(visibleRows = getVisibleQueueRows()) {
   } else {
     const current = templateSelect.value;
     templateSelect.innerHTML = activeTemplates.map((tpl) => `
-      <option value="${tpl.id}">${templateTypeLabel(tpl.kind)}: ${tpl.name}</option>
+      <option value="${tpl.id}">${escapeHtml(templateOptionLabel(tpl))}</option>
     `).join("");
     if (current && activeTemplates.some((tpl) => String(tpl.id) === current)) {
       templateSelect.value = current;
@@ -2053,15 +2442,32 @@ function renderChannels() {
 
 function renderTemplates() {
   const selectedId = state.templateCreateMode ? null : state.selectedTemplateId;
-  $("templatesBody").innerHTML = state.templates.map((t) => `
-    <tr class="${selectedId === t.id ? "active-row" : ""}">
-      <td>${t.name}</td>
-      <td>${templateTypeLabel(t.kind)}</td>
-      <td>${t.status === "active" ? "Актуальный" : "Черновик"}</td>
-      <td>${templateTypeRange(t.kind)}</td>
-      <td><button class="ghost-btn" data-action="template-open" data-tpl-id="${t.id}">Открыть</button></td>
-    </tr>
-  `).join("");
+  $("templatesBody").innerHTML = state.templates.map((t) => {
+    const nameText = escapeHtml(toSingleLineText(t.name));
+    const typeText = escapeHtml(templateTypeLabel(t.kind, { allowMissing: true, fallbackTemplate: t }));
+    const statusText = t.status === "active" ? "Актуальный" : "Черновик";
+    const statusClass = t.status === "active" ? "active" : "draft";
+    const ruleText = escapeHtml(formatTemplateOverdueRule(t));
+    const commentRaw = String(t.commentText || "").trim();
+    const commentFullText = toSingleLineText(commentRaw);
+    const commentPreview = commentFullText
+      ? escapeHtml(templateCommentPreview(commentFullText))
+      : "-";
+    const commentTitleAttr = commentFullText
+      ? ` title="${escapeHtml(commentFullText)}"`
+      : "";
+
+    return `
+      <tr class="${selectedId === t.id ? "active-row" : ""}" data-action="template-open" data-tpl-id="${t.id}">
+        <td class="template-name-cell"><span title="${nameText}">${nameText}</span></td>
+        <td>${typeText}</td>
+        <td><span class="pill ${statusClass}">${statusText}</span></td>
+        <td>${ruleText}</td>
+        <td class="template-comment-cell"><span${commentTitleAttr}>${commentPreview}</span></td>
+        <td><button class="ghost-btn" data-action="template-open" data-tpl-id="${t.id}">Открыть</button></td>
+      </tr>
+    `;
+  }).join("");
 }
 
 function getTemplateById(templateId) {
@@ -2069,18 +2475,37 @@ function getTemplateById(templateId) {
 }
 
 function templateDisplayName(template) {
-  if (!template) return "шаблон";
-  return `${templateTypeLabel(template.kind)}: ${template.name}`;
+  return templateOptionLabel(template);
 }
 
 function canApplyTemplateToOverdue(template, daysOverdue) {
   if (!template) return false;
-  return isTemplateEligibleForOverdue(template.kind, daysOverdue, { allowManualOnly: true });
+  return isTemplateEligibleForOverdue(template, daysOverdue, { allowManualOnly: true });
+}
+
+function buildTemplateRuleDraftFromType(kind, options = {}) {
+  const type = getTemplateType(kind, {
+    allowMissing: true,
+    fallbackTemplate: options.fallbackTemplate || null
+  });
+  const mode = normalizeTemplateOverdueMode(type.overdueMode);
+  const fromDays = Math.max(0, parseTemplateOptionalInt(type.overdueFromDays) ?? type.minOverdue ?? 0);
+  const toDays = Math.max(fromDays, parseTemplateOptionalInt(type.overdueToDays) ?? type.maxOverdue ?? fromDays);
+  const exactDay = Math.max(0, parseTemplateOptionalInt(type.overdueExactDay) ?? 0);
+  return {
+    overdueMode: mode,
+    overdueFromDays: mode === "range" ? fromDays : null,
+    overdueToDays: mode === "range" ? toDays : null,
+    overdueExactDay: mode === "exact" ? exactDay : null,
+    autoAssign: type.autoAssign !== false
+  };
 }
 
 function resetTemplateCreateDraft() {
+  const fallback = getTemplateType(DEFAULT_TEMPLATE_KIND);
   state.templateCreateDraft = {
-    kind: DEFAULT_TEMPLATE_KIND,
+    kind: fallback.id,
+    ...buildTemplateRuleDraftFromType(fallback.id),
     name: "",
     text: ""
   };
@@ -2091,18 +2516,459 @@ function exitTemplateCreateMode() {
   resetTemplateCreateDraft();
 }
 
+function nextTemplateRuleTypeSortOrder() {
+  if (state.templateRuleTypes.length === 0) return 10;
+  const maxOrder = Math.max(...state.templateRuleTypes.map((item) => Number(item.sortOrder) || 0));
+  return Math.max(10, maxOrder + 10);
+}
+
+function resetTemplateRuleTypeCreateDraft() {
+  const fallback = getDefaultTemplateRuleType();
+  state.templateRuleTypeCreateDraft = {
+    id: "",
+    name: "",
+    overdueMode: fallback.overdueMode,
+    overdueFromDays: fallback.overdueFromDays,
+    overdueToDays: fallback.overdueToDays,
+    overdueExactDay: fallback.overdueExactDay,
+    autoAssign: fallback.autoAssign !== false,
+    sortOrder: nextTemplateRuleTypeSortOrder()
+  };
+}
+
+function exitTemplateRuleTypeCreateMode() {
+  state.templateRuleTypeCreateMode = false;
+  resetTemplateRuleTypeCreateDraft();
+}
+
+function ensureTemplateRuleTypeSelection() {
+  if (state.templateRuleTypeCreateMode) return;
+  if (state.templateRuleTypes.length === 0) {
+    state.selectedTemplateRuleTypeId = null;
+    return;
+  }
+  if (!getTemplateRuleTypeById(state.selectedTemplateRuleTypeId)) {
+    state.selectedTemplateRuleTypeId = state.templateRuleTypes[0].id;
+  }
+}
+
+function setTemplateRuleTypeModeVisibility(modeRaw, options = {}) {
+  const { manualOnly = false } = options;
+  const mode = normalizeTemplateOverdueMode(modeRaw);
+  const modeWrap = $("typeDefModeWrap");
+  const fromWrap = $("typeDefFromWrap");
+  const toWrap = $("typeDefToWrap");
+  const exactWrap = $("typeDefExactWrap");
+  if (!modeWrap || !fromWrap || !toWrap || !exactWrap) return;
+  if (manualOnly) {
+    modeWrap.style.display = "none";
+    fromWrap.style.display = "none";
+    toWrap.style.display = "none";
+    exactWrap.style.display = "none";
+    return;
+  }
+  modeWrap.style.display = "";
+  const isExact = mode === "exact";
+  fromWrap.style.display = isExact ? "none" : "";
+  toWrap.style.display = isExact ? "none" : "";
+  exactWrap.style.display = isExact ? "" : "none";
+}
+
+function readTemplateRuleTypeDraftFromEditor() {
+  const manualOnly = $("typeDefAutoAssign").checked;
+  return {
+    name: $("typeDefName").value.trim(),
+    overdueMode: normalizeTemplateOverdueMode($("typeDefMode").value),
+    overdueFromDays: parseTemplateOptionalInt($("typeDefFrom").value),
+    overdueToDays: parseTemplateOptionalInt($("typeDefTo").value),
+    overdueExactDay: parseTemplateOptionalInt($("typeDefExact").value),
+    autoAssign: !manualOnly
+  };
+}
+
+function validateTemplateRuleTypeDraft(draft) {
+  if (!String(draft.name || "").trim()) {
+    return "Название типа обязательно.";
+  }
+  if (draft.autoAssign === false) {
+    return "";
+  }
+  const mode = normalizeTemplateOverdueMode(draft.overdueMode);
+  if (mode === "exact") {
+    if (draft.overdueExactDay === null || draft.overdueExactDay < 0) {
+      return "Для режима «точный день» укажите число >= 0.";
+    }
+    return "";
+  }
+  if (draft.overdueFromDays === null || draft.overdueToDays === null) {
+    return "Для диапазона заполните оба поля: «от» и «до».";
+  }
+  if (draft.overdueFromDays < 0 || draft.overdueToDays < 0) {
+    return "Диапазон просрочки должен быть >= 0.";
+  }
+  if (draft.overdueToDays < draft.overdueFromDays) {
+    return "В диапазоне значение «до» не может быть меньше «от».";
+  }
+  return "";
+}
+
+function setTemplateRuleTypeEditorStatus(text, tone = "warning") {
+  setNotice("typeDefEditorStatus", text, tone);
+}
+
+function renderTemplateRuleTypeSettings() {
+  const body = $("typeDefBody");
+  if (!body) return;
+
+  ensureTemplateRuleTypeSelection();
+
+  if (state.templateRuleTypes.length === 0) {
+    body.innerHTML = UI.emptyRow(3, "Типы шаблонов еще не созданы");
+  } else {
+    body.innerHTML = state.templateRuleTypes.map((type) => `
+      <tr class="${!state.templateRuleTypeCreateMode && type.id === state.selectedTemplateRuleTypeId ? "active-row" : ""}">
+        <td>${escapeHtml(type.name)}</td>
+        <td>${escapeHtml(formatTemplateRuleTypeRule(type))}</td>
+        <td><button class="ghost-btn" data-action="type-def-open" data-type-id="${escapeHtml(type.id)}">Открыть</button></td>
+      </tr>
+    `).join("");
+  }
+
+  if (state.templateRuleTypeCreateMode) {
+    $("typeDefName").value = state.templateRuleTypeCreateDraft.name || "";
+    $("typeDefMode").value = normalizeTemplateOverdueMode(state.templateRuleTypeCreateDraft.overdueMode);
+    $("typeDefFrom").value = state.templateRuleTypeCreateDraft.overdueFromDays ?? "";
+    $("typeDefTo").value = state.templateRuleTypeCreateDraft.overdueToDays ?? "";
+    $("typeDefExact").value = state.templateRuleTypeCreateDraft.overdueExactDay ?? "";
+    $("typeDefAutoAssign").checked = state.templateRuleTypeCreateDraft.autoAssign === false;
+  } else {
+    const selected = getTemplateRuleTypeById(state.selectedTemplateRuleTypeId);
+    if (selected) {
+      $("typeDefName").value = selected.name || "";
+      $("typeDefMode").value = normalizeTemplateOverdueMode(selected.overdueMode);
+      $("typeDefFrom").value = selected.overdueFromDays ?? "";
+      $("typeDefTo").value = selected.overdueToDays ?? "";
+      $("typeDefExact").value = selected.overdueExactDay ?? "";
+      $("typeDefAutoAssign").checked = selected.autoAssign === false;
+    } else {
+      $("typeDefName").value = "";
+      $("typeDefMode").value = DEFAULT_TEMPLATE_OVERDUE_MODE;
+      $("typeDefFrom").value = "";
+      $("typeDefTo").value = "";
+      $("typeDefExact").value = "";
+      $("typeDefAutoAssign").checked = false;
+    }
+  }
+
+  renderTemplateRuleTypeEditorState();
+  renderTemplateTypeSelect();
+}
+
+function renderTemplateRuleTypeEditorState() {
+  const hasRows = state.templateRuleTypes.length > 0;
+  $("typeDefNew").disabled = state.templateRuleTypeCreateMode;
+  const currentDraft = readTemplateRuleTypeDraftFromEditor();
+  setTemplateRuleTypeModeVisibility(currentDraft.overdueMode, { manualOnly: currentDraft.autoAssign === false });
+
+  if (state.templateRuleTypeCreateMode) {
+    const draft = currentDraft;
+    const validationError = validateTemplateRuleTypeDraft(draft);
+    state.templateRuleTypeCreateDraft = {
+      ...state.templateRuleTypeCreateDraft,
+      ...draft
+    };
+    const hasAnyInput = Boolean(
+      draft.name ||
+      draft.overdueFromDays !== null ||
+      draft.overdueToDays !== null ||
+      draft.overdueExactDay !== null ||
+      draft.autoAssign === false
+    );
+    const canSave = !validationError && Boolean(draft.name);
+    $("typeDefSave").disabled = !canSave;
+    $("typeDefCancel").disabled = false;
+    $("typeDefDelete").disabled = true;
+    if (!hasAnyInput) {
+      setTemplateRuleTypeEditorStatus("Заполните поля и сохраните новый тип шаблона.", "warning");
+      return;
+    }
+    if (!canSave) {
+      setTemplateRuleTypeEditorStatus(validationError || "Название типа обязательно.", "warning");
+      return;
+    }
+    setTemplateRuleTypeEditorStatus("Нажмите «Сохранить тип», чтобы добавить новый тип шаблона.", "info");
+    return;
+  }
+
+  const selected = getTemplateRuleTypeById(state.selectedTemplateRuleTypeId);
+  if (!selected) {
+    $("typeDefSave").disabled = true;
+    $("typeDefCancel").disabled = true;
+    $("typeDefDelete").disabled = !hasRows;
+    setTemplateRuleTypeEditorStatus("Выберите тип из списка или создайте новый.", "warning");
+    return;
+  }
+
+  const draft = currentDraft;
+  const validationError = validateTemplateRuleTypeDraft(draft);
+  const dirty =
+    draft.name !== selected.name ||
+    normalizeTemplateOverdueMode(draft.overdueMode) !== normalizeTemplateOverdueMode(selected.overdueMode) ||
+    draft.overdueFromDays !== parseTemplateOptionalInt(selected.overdueFromDays) ||
+    draft.overdueToDays !== parseTemplateOptionalInt(selected.overdueToDays) ||
+    draft.overdueExactDay !== parseTemplateOptionalInt(selected.overdueExactDay) ||
+    draft.autoAssign !== (selected.autoAssign !== false);
+
+  const canSave = !validationError && dirty;
+  $("typeDefSave").disabled = !canSave;
+  $("typeDefCancel").disabled = !dirty;
+  $("typeDefDelete").disabled = state.templateRuleTypes.length <= 1;
+
+  if (validationError) {
+    setTemplateRuleTypeEditorStatus(validationError, "warning");
+    return;
+  }
+  if (dirty) {
+    setTemplateRuleTypeEditorStatus(`Есть несохраненные изменения в типе «${selected.name}».`, "warning");
+    return;
+  }
+  setTemplateRuleTypeEditorStatus(`Тип «${selected.name}» открыт. Изменений нет.`, "info");
+}
+
+function createTemplateRuleType() {
+  state.templateRuleTypeCreateMode = true;
+  resetTemplateRuleTypeCreateDraft();
+  renderTemplateRuleTypeSettings();
+  $("typeDefName").focus();
+}
+
+function saveTemplateRuleTypeFromEditor() {
+  const draft = readTemplateRuleTypeDraftFromEditor();
+  const validationError = validateTemplateRuleTypeDraft(draft);
+  if (validationError) {
+    toast(validationError);
+    return false;
+  }
+
+  const autoAssign = draft.autoAssign !== false;
+  const normalizedMode = autoAssign ? normalizeTemplateOverdueMode(draft.overdueMode) : "range";
+  const payload = {
+    id: "",
+    name: draft.name,
+    overdueMode: normalizedMode,
+    overdueFromDays: null,
+    overdueToDays: null,
+    overdueExactDay: null,
+    autoAssign,
+    sortOrder: 0
+  };
+
+  if (!autoAssign) {
+    payload.overdueFromDays = 0;
+    payload.overdueToDays = 0;
+  } else if (normalizedMode === "exact") {
+    payload.overdueExactDay = Math.max(0, draft.overdueExactDay ?? 0);
+  } else {
+    const from = Math.max(0, draft.overdueFromDays ?? 0);
+    const to = Math.max(from, draft.overdueToDays ?? from);
+    payload.overdueFromDays = from;
+    payload.overdueToDays = to;
+  }
+
+  const current = state.templateRuleTypeCreateMode
+    ? null
+    : getTemplateRuleTypeById(state.selectedTemplateRuleTypeId);
+
+  const nextItems = state.templateRuleTypes.map(cloneTemplateRuleType);
+  if (current) {
+    payload.id = current.id;
+    payload.sortOrder = current.sortOrder;
+    const idx = nextItems.findIndex((x) => x.id === current.id);
+    if (idx >= 0) {
+      nextItems[idx] = payload;
+    } else {
+      nextItems.push(payload);
+    }
+  } else {
+    const usedIds = new Set(nextItems.map((x) => x.id));
+    const baseId = normalizeTemplateRuleTypeId(payload.name) || `type_${nextItems.length + 1}`;
+    let resolvedId = baseId;
+    let suffix = 2;
+    while (usedIds.has(resolvedId)) {
+      resolvedId = `${baseId}_${suffix}`;
+      suffix += 1;
+    }
+    payload.id = resolvedId;
+    payload.sortOrder = nextTemplateRuleTypeSortOrder();
+    nextItems.push(payload);
+  }
+
+  state.templateRuleTypes = normalizeTemplateRuleTypes(nextItems);
+  state.templateRuleTypeCreateMode = false;
+  state.selectedTemplateRuleTypeId = payload.id;
+  resetTemplateRuleTypeCreateDraft();
+  renderTemplateRuleTypeSettings();
+  renderTemplates();
+  renderTemplateEditorState();
+  renderQueue();
+  return true;
+}
+
+function cancelTemplateRuleTypeChanges() {
+  if (state.templateRuleTypeCreateMode) {
+    exitTemplateRuleTypeCreateMode();
+    renderTemplateRuleTypeSettings();
+    return true;
+  }
+  const current = getTemplateRuleTypeById(state.selectedTemplateRuleTypeId);
+  if (!current) return false;
+  renderTemplateRuleTypeSettings();
+  return true;
+}
+
+function deleteSelectedTemplateRuleType() {
+  if (state.templateRuleTypeCreateMode) {
+    return false;
+  }
+  const current = getTemplateRuleTypeById(state.selectedTemplateRuleTypeId);
+  if (!current) return false;
+  if (state.templateRuleTypes.length <= 1) {
+    toast("Нельзя удалить последний тип шаблона.");
+    return false;
+  }
+
+  const usedInTemplates = state.templates.filter((template) => normalizeTemplateKind(template.kind, { allowMissing: true }) === current.id);
+  if (usedInTemplates.length > 0) {
+    toast("Тип используется в существующих шаблонах. Сначала переведите эти шаблоны на другой тип.");
+    return false;
+  }
+
+  state.templateRuleTypes = normalizeTemplateRuleTypes(state.templateRuleTypes.filter((item) => item.id !== current.id));
+  state.selectedTemplateRuleTypeId = state.templateRuleTypes[0]?.id || null;
+  renderTemplateRuleTypeSettings();
+  renderTemplates();
+  renderTemplateEditorState();
+  renderQueue();
+  return true;
+}
+
+function hasTemplateRuleTypeUnsavedChanges() {
+  if (!$("typeDefName")) return false;
+  const draft = readTemplateRuleTypeDraftFromEditor();
+  if (state.templateRuleTypeCreateMode) {
+    return Boolean(String(draft.name || "").trim());
+  }
+  const selected = getTemplateRuleTypeById(state.selectedTemplateRuleTypeId);
+  if (!selected) return false;
+  return (
+    draft.name !== selected.name ||
+    normalizeTemplateOverdueMode(draft.overdueMode) !== normalizeTemplateOverdueMode(selected.overdueMode) ||
+    draft.overdueFromDays !== parseTemplateOptionalInt(selected.overdueFromDays) ||
+    draft.overdueToDays !== parseTemplateOptionalInt(selected.overdueToDays) ||
+    draft.overdueExactDay !== parseTemplateOptionalInt(selected.overdueExactDay) ||
+    draft.autoAssign !== (selected.autoAssign !== false)
+  );
+}
+
 function renderTemplateTypeSelect() {
   const select = $("tplType");
   if (!select) return;
-  const current = normalizeTemplateKind(select.value || state.templateEditorBaseline.kind || DEFAULT_TEMPLATE_KIND);
-  select.innerHTML = TEMPLATE_TYPE_ORDER.map((kind) => `
-    <option value="${kind}">${templateTypeLabel(kind)} (${templateTypeRange(kind)})</option>
-  `).join("");
-  select.value = current;
+  const preferredKind = normalizeTemplateKind(
+    select.value || state.templateCreateDraft.kind || state.templateEditorBaseline.kind || DEFAULT_TEMPLATE_KIND,
+    { allowMissing: true }
+  );
+  const options = state.templateRuleTypes.map((type) => `
+    <option value="${type.id}">${escapeHtml(type.name)}</option>
+  `);
+  if (preferredKind && !state.templateRuleTypes.some((item) => item.id === preferredKind)) {
+    options.push(`<option value="${escapeHtml(preferredKind)}">${escapeHtml(templateTypeLabel(preferredKind, { allowMissing: true }))}</option>`);
+  }
+  select.innerHTML = options.length > 0 ? options.join("") : '<option value="">Типы не настроены</option>';
+  if (preferredKind) {
+    select.value = preferredKind;
+  } else if (state.templateRuleTypes.length > 0) {
+    select.value = state.templateRuleTypes[0].id;
+  }
+  select.disabled = state.templateRuleTypes.length === 0;
 }
 
-function syncTemplateTypeRule(kind) {
-  setNotice("tplTypeRule", templateTypeRule(kind), "info");
+function syncTemplateTypeRule(kind, options = {}) {
+  setNotice("tplTypeRule", templateTypeRule(kind, options), "info");
+}
+
+function resolveTemplateAutoAssignByKind(kind, options = {}) {
+  const type = getTemplateType(kind, {
+    allowMissing: true,
+    fallbackTemplate: options.fallbackTemplate || null
+  });
+  return type.autoAssign !== false;
+}
+
+function setTemplateRuleModeVisibility(_modeRaw, _options = {}) {
+  // Правило просрочки определяется типом шаблона и не редактируется в шаблоне вручную.
+}
+
+function readTemplateRuleDraftFromEditor(options = {}) {
+  const selectedKind = normalizeTemplateKind(
+    options.kind || $("tplType")?.value || DEFAULT_TEMPLATE_KIND,
+    { allowMissing: true }
+  );
+  const source = buildTemplateRuleDraftFromType(selectedKind, {
+    fallbackTemplate: options.fallbackTemplate || null
+  });
+
+  const mode = normalizeTemplateOverdueMode(source.overdueMode || source.mode);
+  const fromDays = parseTemplateOptionalInt(source.overdueFromDays ?? source.fromDays);
+  const toDays = parseTemplateOptionalInt(source.overdueToDays ?? source.toDays);
+  const exactDay = parseTemplateOptionalInt(source.overdueExactDay ?? source.exactDay);
+  const autoAssign = source.autoAssign !== false;
+
+  if ($("tplOverdueMode")) $("tplOverdueMode").value = mode;
+  if ($("tplOverdueFrom")) $("tplOverdueFrom").value = fromDays ?? "";
+  if ($("tplOverdueTo")) $("tplOverdueTo").value = toDays ?? "";
+  if ($("tplOverdueExact")) $("tplOverdueExact").value = exactDay ?? "";
+  if ($("tplAutoAssign")) $("tplAutoAssign").checked = autoAssign;
+
+  return { mode, fromDays, toDays, exactDay, autoAssign };
+}
+
+function validateTemplateRuleDraft(draft, options = {}) {
+  if (options.manualOnly || draft.autoAssign === false) {
+    return "";
+  }
+  const mode = normalizeTemplateOverdueMode(draft.mode);
+  if (mode === "exact") {
+    if (draft.exactDay === null || draft.exactDay < 0) {
+      return "Для режима «точный день» укажите число >= 0.";
+    }
+    return "";
+  }
+
+  if (draft.fromDays === null || draft.toDays === null) {
+    return "Для диапазона заполните оба поля: «от» и «до».";
+  }
+  if (draft.fromDays < 0 || draft.toDays < 0) {
+    return "Диапазон просрочки должен быть >= 0.";
+  }
+  if (draft.toDays < draft.fromDays) {
+    return "В диапазоне значение «до» не может быть меньше «от».";
+  }
+  return "";
+}
+
+function applyTemplateRuleDraftToEditor(draft) {
+  if ($("tplOverdueMode")) $("tplOverdueMode").value = normalizeTemplateOverdueMode(draft.overdueMode || draft.mode);
+  if ($("tplOverdueFrom")) $("tplOverdueFrom").value = draft.overdueFromDays ?? draft.fromDays ?? "";
+  if ($("tplOverdueTo")) $("tplOverdueTo").value = draft.overdueToDays ?? draft.toDays ?? "";
+  if ($("tplOverdueExact")) $("tplOverdueExact").value = draft.overdueExactDay ?? draft.exactDay ?? "";
+  $("tplAutoAssign").checked = draft.autoAssign !== false;
+  setTemplateRuleModeVisibility(draft.overdueMode || draft.mode, { manualOnly: draft.autoAssign === false });
+}
+
+function applyTemplateTypeDefaultsToEditor(kind, options = {}) {
+  const normalizedKind = normalizeTemplateKind(kind, { allowMissing: true });
+  applyTemplateRuleDraftToEditor(buildTemplateRuleDraftFromType(normalizedKind, options));
+  syncTemplateTypeRule(normalizedKind, options);
 }
 
 function setTemplateEditorStatus(text, tone = "warning") {
@@ -2114,17 +2980,42 @@ function renderTemplateEditorState() {
   const typeSelect = $("tplType");
   const nameInput = $("tplName");
   const textInput = $("tplText");
-  if (!typeSelect || !nameInput || !textInput) return;
+  const autoAssignInput = $("tplAutoAssign");
+  if (!typeSelect || !nameInput || !textInput || !autoAssignInput) return;
 
   if (state.templateCreateMode) {
-    const kind = normalizeTemplateKind(typeSelect.value || state.templateCreateDraft.kind);
+    const kind = normalizeTemplateKind(typeSelect.value || state.templateCreateDraft.kind, { allowMissing: true });
+    autoAssignInput.checked = resolveTemplateAutoAssignByKind(kind);
+    const ruleDraft = readTemplateRuleDraftFromEditor({ kind });
     const name = nameInput.value.trim();
     const text = textInput.value.trim();
-    state.templateCreateDraft = { kind, name, text };
+    const defaultType = getDefaultTemplateRuleType();
+    const defaultRule = buildTemplateRuleDraftFromType(defaultType.id);
+    state.templateCreateDraft = {
+      kind,
+      overdueMode: ruleDraft.mode,
+      overdueFromDays: ruleDraft.fromDays,
+      overdueToDays: ruleDraft.toDays,
+      overdueExactDay: ruleDraft.exactDay,
+      autoAssign: ruleDraft.autoAssign,
+      name,
+      text
+    };
     syncTemplateTypeRule(kind);
+    setTemplateRuleModeVisibility(ruleDraft.mode, { manualOnly: ruleDraft.autoAssign === false });
 
-    const hasAnyInput = Boolean(name || text);
-    const canSave = Boolean(name && text);
+    const ruleValidation = validateTemplateRuleDraft(ruleDraft, { manualOnly: ruleDraft.autoAssign === false });
+    const hasAnyInput = Boolean(
+      name ||
+      text ||
+      kind !== defaultType.id ||
+      normalizeTemplateOverdueMode(ruleDraft.mode) !== normalizeTemplateOverdueMode(defaultRule.overdueMode) ||
+      ruleDraft.fromDays !== parseTemplateOptionalInt(defaultRule.overdueFromDays) ||
+      ruleDraft.toDays !== parseTemplateOptionalInt(defaultRule.overdueToDays) ||
+      ruleDraft.exactDay !== parseTemplateOptionalInt(defaultRule.overdueExactDay) ||
+      ruleDraft.autoAssign !== (defaultRule.autoAssign !== false)
+    );
+    const canSave = Boolean(name && text && !ruleValidation);
 
     $("tplDraft").disabled = !canSave;
     $("tplPublish").disabled = !canSave;
@@ -2135,7 +3026,10 @@ function renderTemplateEditorState() {
       return;
     }
     if (!canSave) {
-      setTemplateEditorStatus("Название и текст нового шаблона обязательны.", "warning");
+      const baseMessage = !name || !text
+        ? "Название и текст нового шаблона обязательны."
+        : ruleValidation;
+      setTemplateEditorStatus(baseMessage, "warning");
       return;
     }
     setTemplateEditorStatus("Новый шаблон готов к сохранению. Выберите статус: черновик или активный.", "info");
@@ -2144,8 +3038,10 @@ function renderTemplateEditorState() {
 
   const template = getTemplateById(state.selectedTemplateId);
   if (!template) {
-    typeSelect.value = DEFAULT_TEMPLATE_KIND;
-    syncTemplateTypeRule(DEFAULT_TEMPLATE_KIND);
+    const fallbackType = getDefaultTemplateRuleType();
+    typeSelect.value = fallbackType.id;
+    syncTemplateTypeRule(fallbackType.id);
+    applyTemplateRuleDraftToEditor(buildTemplateRuleDraftFromType(fallbackType.id));
     nameInput.value = "";
     textInput.value = "";
     $("tplDraft").disabled = true;
@@ -2156,19 +3052,34 @@ function renderTemplateEditorState() {
   }
 
   if (!typeSelect.value) {
-    typeSelect.value = normalizeTemplateKind(template.kind);
+    typeSelect.value = normalizeTemplateKind(template.kind, { allowMissing: true });
   }
-  const selectedKind = normalizeTemplateKind(typeSelect.value);
-  syncTemplateTypeRule(selectedKind);
+  const selectedKind = normalizeTemplateKind(typeSelect.value, { allowMissing: true });
+  autoAssignInput.checked = resolveTemplateAutoAssignByKind(selectedKind, { fallbackTemplate: template });
+  const ruleDraft = readTemplateRuleDraftFromEditor({ kind: selectedKind, fallbackTemplate: template });
+  setTemplateRuleModeVisibility(ruleDraft.mode, { manualOnly: ruleDraft.autoAssign === false });
+  const ruleValidation = validateTemplateRuleDraft(ruleDraft, { manualOnly: ruleDraft.autoAssign === false });
+  syncTemplateTypeRule(selectedKind, { fallbackTemplate: template });
 
   const dirty =
     nameInput.value.trim() !== state.templateEditorBaseline.name ||
     textInput.value.trim() !== state.templateEditorBaseline.text ||
-    selectedKind !== state.templateEditorBaseline.kind;
+    selectedKind !== state.templateEditorBaseline.kind ||
+    normalizeTemplateOverdueMode(ruleDraft.mode) !== normalizeTemplateOverdueMode(state.templateEditorBaseline.overdueMode) ||
+    ruleDraft.fromDays !== parseTemplateOptionalInt(state.templateEditorBaseline.overdueFromDays) ||
+    ruleDraft.toDays !== parseTemplateOptionalInt(state.templateEditorBaseline.overdueToDays) ||
+    ruleDraft.exactDay !== parseTemplateOptionalInt(state.templateEditorBaseline.overdueExactDay) ||
+    ruleDraft.autoAssign !== Boolean(state.templateEditorBaseline.autoAssign);
 
-  $("tplDraft").disabled = false;
-  $("tplPublish").disabled = false;
+  const canSaveCurrent = !ruleValidation;
+  $("tplDraft").disabled = !canSaveCurrent;
+  $("tplPublish").disabled = !canSaveCurrent;
   $("tplCancel").disabled = !dirty;
+
+  if (ruleValidation) {
+    setTemplateEditorStatus(ruleValidation, "warning");
+    return;
+  }
 
   if (dirty) {
     setTemplateEditorStatus(`Есть несохраненные изменения в шаблоне «${template.name}».`, "warning");
@@ -2182,12 +3093,19 @@ function loadTemplateToEditor(templateId) {
   if (!template) return false;
   exitTemplateCreateMode();
   state.selectedTemplateId = template.id;
-  template.kind = normalizeTemplateKind(template.kind);
+  template.kind = normalizeTemplateKind(template.kind, { allowMissing: true });
   $("tplType").value = template.kind;
+  const baselineRule = buildTemplateRuleDraftFromType(template.kind, { fallbackTemplate: template });
+  applyTemplateRuleDraftToEditor(baselineRule);
   $("tplName").value = template.name || "";
   $("tplText").value = template.text || "";
   state.templateEditorBaseline = {
     kind: template.kind,
+    overdueMode: normalizeTemplateOverdueMode(baselineRule.overdueMode),
+    overdueFromDays: parseTemplateOptionalInt(baselineRule.overdueFromDays),
+    overdueToDays: parseTemplateOptionalInt(baselineRule.overdueToDays),
+    overdueExactDay: parseTemplateOptionalInt(baselineRule.overdueExactDay),
+    autoAssign: baselineRule.autoAssign !== false,
     name: $("tplName").value.trim(),
     text: $("tplText").value.trim()
   };
@@ -2197,17 +3115,43 @@ function loadTemplateToEditor(templateId) {
 }
 
 async function applyTemplateEditorChanges(nextStatus, successText) {
-  const kind = normalizeTemplateKind($("tplType").value);
+  const kind = normalizeTemplateKind($("tplType").value, { allowMissing: true });
+  const currentTemplate = state.templateCreateMode ? null : getTemplateById(state.selectedTemplateId);
+  const ruleDraft = readTemplateRuleDraftFromEditor({ kind, fallbackTemplate: currentTemplate });
+  const autoAssign = ruleDraft.autoAssign;
+  const manualOnly = autoAssign === false;
+  const ruleValidation = validateTemplateRuleDraft(ruleDraft, { manualOnly });
   const name = $("tplName").value.trim();
   const text = $("tplText").value.trim();
-  if (!name || !text) {
+  if (!name || !text || ruleValidation) {
+    if (ruleValidation) {
+      toast(ruleValidation);
+      return false;
+    }
     toast("Название и текст шаблона обязательны");
     return false;
   }
 
-  const currentTemplate = state.templateCreateMode ? null : getTemplateById(state.selectedTemplateId);
   const status = nextStatus || (currentTemplate?.status || "draft");
-  const payload = { kind, name, text, status };
+  const resolvedCommentText = state.templateCreateMode
+    ? ""
+    : String(currentTemplate?.commentText || "").trim();
+  if (status === "active" && !resolvedCommentText) {
+    toast("Для активного шаблона задайте комментарий в разделе «Настройки» → «Комментарии в договор»");
+    return false;
+  }
+  const payload = {
+    kind,
+    name,
+    text,
+    status,
+    overdueMode: manualOnly ? "range" : ruleDraft.mode,
+    overdueFromDays: manualOnly ? 0 : (ruleDraft.mode === "range" ? ruleDraft.fromDays : null),
+    overdueToDays: manualOnly ? 0 : (ruleDraft.mode === "range" ? ruleDraft.toDays : null),
+    overdueExactDay: manualOnly ? null : (ruleDraft.mode === "exact" ? ruleDraft.exactDay : null),
+    autoAssign,
+    commentText: resolvedCommentText
+  };
 
   try {
     if (state.templateCreateMode) {
@@ -2257,7 +3201,9 @@ function cancelTemplateEditorChanges(silent = false) {
     if (state.selectedTemplateId) {
       loadTemplateToEditor(state.selectedTemplateId);
     } else {
-      $("tplType").value = DEFAULT_TEMPLATE_KIND;
+      const fallbackType = getDefaultTemplateRuleType();
+      $("tplType").value = fallbackType.id;
+      applyTemplateRuleDraftToEditor(buildTemplateRuleDraftFromType(fallbackType.id));
       $("tplName").value = "";
       $("tplText").value = "";
       renderTemplates();
@@ -2272,6 +3218,7 @@ function cancelTemplateEditorChanges(silent = false) {
   const template = getTemplateById(state.selectedTemplateId);
   if (!template) return;
   $("tplType").value = state.templateEditorBaseline.kind;
+  applyTemplateRuleDraftToEditor(state.templateEditorBaseline);
   $("tplName").value = state.templateEditorBaseline.name;
   $("tplText").value = state.templateEditorBaseline.text;
   renderTemplateEditorState();
@@ -2283,7 +3230,8 @@ function cancelTemplateEditorChanges(silent = false) {
 function createTemplate() {
   state.templateCreateMode = true;
   resetTemplateCreateDraft();
-  $("tplType").value = DEFAULT_TEMPLATE_KIND;
+  $("tplType").value = state.templateCreateDraft.kind;
+  applyTemplateRuleDraftToEditor(state.templateCreateDraft);
   $("tplName").value = "";
   $("tplText").value = "";
   renderTemplates();
@@ -2293,9 +3241,16 @@ function createTemplate() {
 
 function ensureTemplateCreateModeFromEditorInput() {
   if (state.templateCreateMode || state.selectedTemplateId !== null) return false;
+  const kind = normalizeTemplateKind($("tplType").value || DEFAULT_TEMPLATE_KIND, { allowMissing: true });
+  const ruleDraft = readTemplateRuleDraftFromEditor({ kind });
   state.templateCreateMode = true;
   state.templateCreateDraft = {
-    kind: normalizeTemplateKind($("tplType").value || DEFAULT_TEMPLATE_KIND),
+    kind,
+    overdueMode: ruleDraft.mode,
+    overdueFromDays: ruleDraft.fromDays,
+    overdueToDays: ruleDraft.toDays,
+    overdueExactDay: ruleDraft.exactDay,
+    autoAssign: ruleDraft.autoAssign,
     name: $("tplName").value,
     text: $("tplText").value
   };
@@ -2528,6 +3483,201 @@ async function deleteSelectedManualPreset() {
   }
 }
 
+function sortedTemplatesForCommentSettings() {
+  return [...state.templates].sort((a, b) => {
+    const statusWeight = (a.status === "active" ? 0 : 1) - (b.status === "active" ? 0 : 1);
+    if (statusWeight !== 0) return statusWeight;
+    const byKind = templateKindSortOrder(a.kind) - templateKindSortOrder(b.kind);
+    if (byKind !== 0) return byKind;
+    return String(a.name || "").localeCompare(String(b.name || ""), "ru");
+  });
+}
+
+function templateCommentOptionLabel(template) {
+  const statusText = template.status === "active" ? "Актуальный" : "Черновик";
+  return `${templateOptionLabel(template)} · ${statusText}`;
+}
+
+function templateCommentListStatus(template) {
+  const status = template.status === "active" ? "Актуальный" : "Черновик";
+  const comment = String(template.commentText || "").trim();
+  if (!comment) {
+    return `${status} · комментарий не задан`;
+  }
+  return `${status} · ${templateCommentPreview(comment, 80)}`;
+}
+
+function hasTemplateCommentUnsavedChanges() {
+  const select = $("cfgTemplateCommentTemplate");
+  const input = $("cfgTemplateCommentText");
+  if (!select || !input) return false;
+  const template = getTemplateById(Number(select.value || 0));
+  if (!template) return false;
+  return input.value.trim() !== String(template.commentText || "").trim();
+}
+
+function renderTemplateCommentList(templates, selectedTemplateId) {
+  const body = $("cfgTemplateCommentBody");
+  if (!body) return;
+  if (!Array.isArray(templates) || templates.length === 0) {
+    body.innerHTML = UI.emptyRow(3, "Шаблоны не созданы");
+    return;
+  }
+
+  body.innerHTML = templates.map((template) => {
+    const label = escapeHtml(templateOptionLabel(template));
+    const statusAndComment = escapeHtml(templateCommentListStatus(template));
+    const isSelected = Number(selectedTemplateId) === Number(template.id);
+    return `
+      <tr class="${isSelected ? "active-row" : ""}">
+        <td class="cell-ellipsis"><span title="${label}">${label}</span></td>
+        <td class="cell-ellipsis"><span title="${statusAndComment}">${statusAndComment}</span></td>
+        <td><button class="ghost-btn" data-action="template-comment-open" data-tpl-id="${template.id}">Открыть</button></td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function trySelectTemplateCommentTemplate(templateId, options = {}) {
+  const { skipUnsavedGuard = false } = options;
+  const nextId = Number(templateId || 0);
+  if (!nextId) return false;
+  const currentId = Number(state.settingsTemplateCommentTemplateId || 0);
+  if (!skipUnsavedGuard && currentId > 0 && currentId !== nextId && hasTemplateCommentUnsavedChanges()) {
+    const confirmed = window.confirm("Есть несохраненные изменения комментария. Переключиться на другой шаблон без сохранения?");
+    if (!confirmed) return false;
+  }
+
+  state.settingsTemplateCommentTemplateId = nextId;
+  renderTemplateCommentSettings();
+  return true;
+}
+
+function renderTemplateCommentSettingsState() {
+  const select = $("cfgTemplateCommentTemplate");
+  const input = $("cfgTemplateCommentText");
+  const saveBtn = $("cfgTemplateCommentSave");
+  const clearBtn = $("cfgTemplateCommentClear");
+  if (!select || !input || !saveBtn) return;
+
+  const templateId = Number(select.value || 0);
+  const template = getTemplateById(templateId);
+  if (!template) {
+    saveBtn.disabled = true;
+    if (clearBtn) clearBtn.disabled = true;
+    input.disabled = true;
+    setNotice("cfgTemplateCommentStatus", "Сначала создайте хотя бы один шаблон.", "warning");
+    return;
+  }
+
+  input.disabled = false;
+  const baseline = String(template.commentText || "").trim();
+  const current = input.value.trim();
+  const dirty = current !== baseline;
+  const activeWithoutComment = template.status === "active" && !current;
+  saveBtn.disabled = !dirty || activeWithoutComment;
+  if (clearBtn) {
+    clearBtn.disabled = current.length === 0;
+  }
+
+  if (activeWithoutComment) {
+    setNotice("cfgTemplateCommentStatus", `Шаблон «${template.name}» активен. Заполните комментарий перед сохранением.`, "warning");
+    return;
+  }
+
+  if (dirty) {
+    setNotice("cfgTemplateCommentStatus", `Есть несохраненные изменения комментария для шаблона «${template.name}».`, "warning");
+    return;
+  }
+
+  setNotice("cfgTemplateCommentStatus", `Комментарий шаблона «${template.name}» сохранен.`, "info");
+}
+
+function renderTemplateCommentSettings() {
+  const select = $("cfgTemplateCommentTemplate");
+  const input = $("cfgTemplateCommentText");
+  const saveBtn = $("cfgTemplateCommentSave");
+  const clearBtn = $("cfgTemplateCommentClear");
+  if (!select || !input || !saveBtn) return;
+
+  const templates = sortedTemplatesForCommentSettings();
+  if (templates.length === 0) {
+    state.settingsTemplateCommentTemplateId = null;
+    select.innerHTML = '<option value="">Шаблоны не созданы</option>';
+    select.disabled = true;
+    input.value = "";
+    input.disabled = true;
+    saveBtn.disabled = true;
+    if (clearBtn) clearBtn.disabled = true;
+    renderTemplateCommentList([], null);
+    setNotice("cfgTemplateCommentStatus", "Сначала создайте шаблон, затем задайте комментарий.", "warning");
+    return;
+  }
+
+  const selectedCandidate = Number(state.settingsTemplateCommentTemplateId || select.value || 0);
+  const selectedTemplate = templates.find((t) => t.id === selectedCandidate) || templates[0];
+  state.settingsTemplateCommentTemplateId = selectedTemplate.id;
+
+  renderTemplateCommentList(templates, selectedTemplate.id);
+
+  select.innerHTML = templates.map((tpl) => `
+    <option value="${tpl.id}">${escapeHtml(templateCommentOptionLabel(tpl))}</option>
+  `).join("");
+  select.value = String(selectedTemplate.id);
+
+  input.value = String(selectedTemplate.commentText || "");
+  renderTemplateCommentSettingsState();
+}
+
+async function saveTemplateCommentFromSettings() {
+  const select = $("cfgTemplateCommentTemplate");
+  const input = $("cfgTemplateCommentText");
+  if (!select || !input) return false;
+
+  const templateId = Number(select.value || 0);
+  const template = getTemplateById(templateId);
+  if (!template) {
+    toast("Сначала выберите шаблон для комментария");
+    return false;
+  }
+
+  const commentText = input.value.trim();
+  if (template.status === "active" && !commentText) {
+    toast("Для активного шаблона комментарий обязателен");
+    renderTemplateCommentSettingsState();
+    return false;
+  }
+
+  const mode = normalizeTemplateOverdueMode(template.overdueMode);
+  const autoAssign = resolveTemplateAutoAssignByKind(template.kind, { fallbackTemplate: template });
+  const payload = {
+    kind: template.kind,
+    name: template.name,
+    text: template.text,
+    status: template.status,
+    overdueMode: mode,
+    overdueFromDays: mode === "range" ? parseTemplateOptionalInt(template.overdueFromDays) : null,
+    overdueToDays: mode === "range" ? parseTemplateOptionalInt(template.overdueToDays) : null,
+    overdueExactDay: mode === "exact" ? parseTemplateOptionalInt(template.overdueExactDay) : null,
+    autoAssign,
+    commentText
+  };
+
+  try {
+    await fetchApiJson(`/api/templates/${encodeURIComponent(template.id)}`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    });
+    state.settingsTemplateCommentTemplateId = template.id;
+    await refreshTemplatesFromBackend({ silent: true });
+    toast(`Комментарий для шаблона «${template.name}» сохранен`);
+    return true;
+  } catch (error) {
+    toast(`Не удалось сохранить комментарий шаблона: ${error?.message || "ошибка backend"}`);
+    return false;
+  }
+}
+
 function readSettingsDraftFromUI() {
   return {
     loginUrl: $("cfgLoginUrl").value.trim(),
@@ -2537,13 +3687,8 @@ function readSettingsDraftFromUI() {
     allowLiveDispatch: $("cfgAllowLiveDispatch")?.checked !== false,
     workWindowStart: $("cfgWorkWindowStart").value.trim() || DEFAULT_WORK_WINDOW_START,
     workWindowEnd: $("cfgWorkWindowEnd").value.trim() || DEFAULT_WORK_WINDOW_END,
-    commentRules: {
-      sms2: $("cfgCommentSms2").value.trim() || "смс2",
-      sms3: $("cfgCommentSms3").value.trim() || "смс3",
-      ka1: $("cfgCommentKa1").value.trim() || "смс от ка",
-      kaN: $("cfgCommentKaN").value.trim() || "смс ка{n}",
-      kaFinal: $("cfgCommentKaFinal").value.trim() || "смс ка фин"
-    }
+    commentRules: normalizeCommentRules(state.commentRules),
+    templateRuleTypes: normalizeTemplateRuleTypes(state.templateRuleTypes)
   };
 }
 
@@ -2570,11 +3715,19 @@ function applySettingsDraftToUI(settings) {
   if (Object.prototype.hasOwnProperty.call(settings, "workWindowEnd")) {
     $("cfgWorkWindowEnd").value = settings.workWindowEnd || DEFAULT_WORK_WINDOW_END;
   }
-  $("cfgCommentSms2").value = settings.commentRules?.sms2 || "смс2";
-  $("cfgCommentSms3").value = settings.commentRules?.sms3 || "смс3";
-  $("cfgCommentKa1").value = settings.commentRules?.ka1 || "смс от ка";
-  $("cfgCommentKaN").value = settings.commentRules?.kaN || "смс ка{n}";
-  $("cfgCommentKaFinal").value = settings.commentRules?.kaFinal || "смс ка фин";
+  if (Object.prototype.hasOwnProperty.call(settings, "commentRules")) {
+    state.commentRules = normalizeCommentRules(settings.commentRules);
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, "templateRuleTypes")) {
+    state.templateRuleTypes = normalizeTemplateRuleTypes(settings.templateRuleTypes);
+    if (!state.templateRuleTypeCreateMode && !getTemplateRuleTypeById(state.selectedTemplateRuleTypeId)) {
+      state.selectedTemplateRuleTypeId = state.templateRuleTypes[0]?.id || null;
+    }
+    if (state.templateRuleTypeCreateMode) {
+      resetTemplateRuleTypeCreateDraft();
+    }
+    renderTemplateRuleTypeSettings();
+  }
 }
 
 function setSettingsBaselineFromUI() {
@@ -2584,22 +3737,44 @@ function setSettingsBaselineFromUI() {
 function hasSettingsUnsavedChanges() {
   if (!state.settingsBaseline) return false;
   const current = readSettingsDraftFromUI();
-  return JSON.stringify(current) !== JSON.stringify(state.settingsBaseline);
+  return JSON.stringify(current) !== JSON.stringify(state.settingsBaseline) || hasTemplateRuleTypeUnsavedChanges();
 }
 
 function hasTemplateUnsavedChanges() {
   const typeSelect = $("tplType");
   const nameInput = $("tplName");
   const textInput = $("tplText");
+  const autoAssignInput = $("tplAutoAssign");
   if (!nameInput || !textInput || !typeSelect) return false;
-  const kind = normalizeTemplateKind(typeSelect.value);
-  if (state.templateCreateMode) {
-    return Boolean(nameInput.value.trim() || textInput.value.trim() || kind !== DEFAULT_TEMPLATE_KIND);
-  }
+  if (!autoAssignInput) return false;
+  const kind = normalizeTemplateKind(typeSelect.value, { allowMissing: true });
   const template = getTemplateById(state.selectedTemplateId);
+  const ruleDraft = readTemplateRuleDraftFromEditor({
+    kind,
+    fallbackTemplate: state.templateCreateMode ? null : template
+  });
+  if (state.templateCreateMode) {
+    const fallbackType = getDefaultTemplateRuleType();
+    const fallbackRule = buildTemplateRuleDraftFromType(fallbackType.id);
+    return Boolean(
+      nameInput.value.trim() ||
+      textInput.value.trim() ||
+      kind !== fallbackType.id ||
+      normalizeTemplateOverdueMode(ruleDraft.mode) !== normalizeTemplateOverdueMode(fallbackRule.overdueMode) ||
+      ruleDraft.fromDays !== parseTemplateOptionalInt(fallbackRule.overdueFromDays) ||
+      ruleDraft.toDays !== parseTemplateOptionalInt(fallbackRule.overdueToDays) ||
+      ruleDraft.exactDay !== parseTemplateOptionalInt(fallbackRule.overdueExactDay) ||
+      ruleDraft.autoAssign !== (fallbackRule.autoAssign !== false)
+    );
+  }
   if (!template) return false;
   return (
     kind !== state.templateEditorBaseline.kind ||
+    normalizeTemplateOverdueMode(ruleDraft.mode) !== normalizeTemplateOverdueMode(state.templateEditorBaseline.overdueMode) ||
+    ruleDraft.fromDays !== parseTemplateOptionalInt(state.templateEditorBaseline.overdueFromDays) ||
+    ruleDraft.toDays !== parseTemplateOptionalInt(state.templateEditorBaseline.overdueToDays) ||
+    ruleDraft.exactDay !== parseTemplateOptionalInt(state.templateEditorBaseline.overdueExactDay) ||
+    ruleDraft.autoAssign !== Boolean(state.templateEditorBaseline.autoAssign) ||
     nameInput.value.trim() !== state.templateEditorBaseline.name ||
     textInput.value.trim() !== state.templateEditorBaseline.text
   );
@@ -2651,6 +3826,10 @@ async function resolveUnsavedChangesBeforeNavigation(options = {}) {
       toast("Типовой ответ сохранен");
     }
     if (settingsDirty) {
+      if (hasTemplateRuleTypeUnsavedChanges()) {
+        const typeSaved = saveTemplateRuleTypeFromEditor();
+        if (!typeSaved) return false;
+      }
       const settingsSaved = await saveSettings({ silent: true });
       if (!settingsSaved) return false;
     }
@@ -2665,6 +3844,10 @@ async function resolveUnsavedChangesBeforeNavigation(options = {}) {
   }
   if (settingsDirty && state.settingsBaseline) {
     applySettingsDraftToUI(state.settingsBaseline);
+    if (state.templateRuleTypeCreateMode) {
+      exitTemplateRuleTypeCreateMode();
+    }
+    renderTemplateRuleTypeSettings();
     void refreshRunForecastFromBackend({ silent: true });
   }
   return true;
@@ -2688,7 +3871,7 @@ function queueTemplateOptions(currentTemplateId) {
     return items.join("");
   }
   items.push(...options.map((tpl) => `
-    <option value="${tpl.id}" ${tpl.id === currentTemplateId ? "selected" : ""}>${templateTypeLabel(tpl.kind)}: ${tpl.name}</option>
+    <option value="${tpl.id}" ${tpl.id === currentTemplateId ? "selected" : ""}>${escapeHtml(templateOptionLabel(tpl))}</option>
   `));
   return items.join("");
 }
@@ -2754,7 +3937,6 @@ function renderClientsDb() {
         <td>
           <div class="actions slim">
             <button class="ghost-btn" data-action="client-open-dialog" data-client-phone="${client.phone}">В диалог</button>
-            <button class="ghost-btn" data-action="client-fetch-debt" data-client-external-id="${client.externalClientId || ""}" ${client.externalClientId ? "" : "disabled"}>Узнать сумму</button>
             <button class="ghost-btn" data-action="client-toggle-stop" data-client-phone="${client.phone}">${inStop ? "Убрать из стоп-листа" : "В стоп-лист"}</button>
             ${excluded ? `<button class="ghost-btn" data-action="client-return-plan" data-client-id="${client.id}" ${state.runRuntime ? "disabled" : ""}>Вернуть в план</button>` : ""}
           </div>
@@ -2797,7 +3979,6 @@ function renderQueue() {
       <td>
         <div class="actions slim">
           <button class="ghost-btn" data-action="queue-open-dialog" data-q-phone="${q.phone}">В диалог</button>
-          <button class="ghost-btn" data-action="queue-fetch-debt" data-q-external-id="${q.externalClientId || ""}" ${q.externalClientId ? "" : "disabled"}>Узнать сумму</button>
           <button class="ghost-btn" data-action="queue-toggle-stop" data-q-id="${q.id}" data-q-phone="${q.phone}">${isPhoneInStopList(q.phone) ? "Убрать из стоп-листа" : "В стоп-лист"}</button>
           <button class="ghost-btn" data-action="queue-remove-plan" data-q-id="${q.id}" ${state.runRuntime || !["queued", "retry"].includes(q.status) ? "disabled" : ""}>Убрать из плана</button>
         </div>
@@ -3567,8 +4748,22 @@ async function refreshTemplatesFromBackend(options = {}) {
   try {
     const data = await fetchApiJson("/api/templates");
     state.templates = Array.isArray(data) ? data.map(mapTemplateDtoToUi) : [];
-    renderTemplates();
-    renderTemplateEditorState();
+    if (!state.templateCreateMode) {
+      const selectedExists = state.selectedTemplateId !== null &&
+        state.templates.some((tpl) => tpl.id === state.selectedTemplateId);
+      if (!selectedExists) {
+        state.selectedTemplateId = state.templates.length > 0 ? state.templates[0].id : null;
+      }
+    }
+
+    if (!state.templateCreateMode && state.selectedTemplateId !== null) {
+      loadTemplateToEditor(state.selectedTemplateId);
+    } else {
+      renderTemplates();
+      renderTemplateEditorState();
+    }
+    renderTemplateRuleTypeSettings();
+    renderTemplateCommentSettings();
     renderQueue();
     return true;
   } catch (error) {
@@ -4001,7 +5196,17 @@ async function saveSettings(options = {}) {
       ka1: draft.commentRules.ka1,
       kaN: draft.commentRules.kaN,
       kaFinal: draft.commentRules.kaFinal
-    }
+    },
+    templateRuleTypes: draft.templateRuleTypes.map((item) => ({
+      id: item.id,
+      name: item.name,
+      overdueMode: item.overdueMode,
+      overdueFromDays: item.overdueFromDays,
+      overdueToDays: item.overdueToDays,
+      overdueExactDay: item.overdueExactDay,
+      autoAssign: item.autoAssign !== false,
+      sortOrder: item.sortOrder
+    }))
   };
 
   try {
@@ -4018,10 +5223,15 @@ async function saveSettings(options = {}) {
       allowLiveDispatch: saved.allowLiveDispatch,
       workWindowStart: saved.workWindowStart,
       workWindowEnd: saved.workWindowEnd,
-      commentRules: saved.commentRules
+      commentRules: saved.commentRules,
+      templateRuleTypes: saved.templateRuleTypes
     });
     if (saved.commentRules) {
-      state.commentRules = { ...state.commentRules, ...saved.commentRules };
+      state.commentRules = normalizeCommentRules(saved.commentRules);
+    }
+    const templatesRefreshed = await refreshTemplatesFromBackend({ silent: true });
+    if (!templatesRefreshed && !silent) {
+      toast("Настройки сохранены, но не удалось обновить список шаблонов. Обновите вкладку «Шаблоны».");
     }
     setSettingsBaselineFromUI();
     await refreshRunStatusFromBackend({ silent: true });
@@ -4049,10 +5259,11 @@ async function loadSettings() {
       allowLiveDispatch: data.allowLiveDispatch,
       workWindowStart: data.workWindowStart,
       workWindowEnd: data.workWindowEnd,
-      commentRules: data.commentRules
+      commentRules: data.commentRules,
+      templateRuleTypes: data.templateRuleTypes
     });
     if (data.commentRules) {
-      state.commentRules = { ...state.commentRules, ...data.commentRules };
+      state.commentRules = normalizeCommentRules(data.commentRules);
     }
   } catch (error) {
     addRunLog(`Не удалось загрузить настройки из backend: ${error?.message || "ошибка"}. Используются текущие значения формы.`);
@@ -4060,6 +5271,7 @@ async function loadSettings() {
   }
 
   setSettingsBaselineFromUI();
+  renderTemplateRuleTypeSettings();
   renderManualPresetManager();
 }
 
@@ -4699,7 +5911,7 @@ function buildDebtToastText(debt) {
 }
 
 async function fetchDebtByExternalClientId(externalClientId, options = {}) {
-  const { silent = false } = options;
+  const { silent = false, skipUiRefresh = false } = options;
   const normalized = String(externalClientId || "").trim();
   if (!normalized) {
     if (!silent) {
@@ -4717,10 +5929,12 @@ async function fetchDebtByExternalClientId(externalClientId, options = {}) {
       })
     });
 
-    await refreshClientsSnapshotFromBackend({ silent: true });
-    await refreshQueueFromBackend({ silent: true, runSessionId: state.queueSessionId || null });
-    renderDialogs();
-    renderChat();
+    if (!skipUiRefresh) {
+      await refreshClientsSnapshotFromBackend({ silent: true });
+      await refreshQueueFromBackend({ silent: true, runSessionId: state.queueSessionId || null });
+      renderDialogs();
+      renderChat();
+    }
     if (!silent) {
       toast(buildDebtToastText(result?.debt));
     }
@@ -4731,6 +5945,83 @@ async function fetchDebtByExternalClientId(externalClientId, options = {}) {
     }
     return null;
   }
+}
+
+function collectExternalClientIds(rows) {
+  return Array.from(new Set(
+    (rows || [])
+      .map((row) => String(row?.externalClientId || "").trim())
+      .filter((id) => id.length > 0)
+  ));
+}
+
+async function bulkFetchDebtByRows(rows, options = {}) {
+  const { emptySelectionMessage, emptyExternalIdMessage } = options;
+  if (state.bulkDebtInProgress) {
+    toast("Обновление суммы долга уже выполняется. Дождитесь завершения.");
+    return;
+  }
+  if (!Array.isArray(rows) || rows.length === 0) {
+    toast(emptySelectionMessage || "Сначала выберите клиентов");
+    return;
+  }
+
+  const externalIds = collectExternalClientIds(rows);
+  const missingExternalIdCount = rows.filter((row) => String(row?.externalClientId || "").trim() === "").length;
+  if (externalIds.length === 0) {
+    toast(emptyExternalIdMessage || "У выбранных клиентов отсутствует externalClientId");
+    return;
+  }
+
+  state.bulkDebtInProgress = true;
+  renderClientsBulkUi();
+  renderQueueBulkUi();
+  try {
+    let success = 0;
+    let failed = 0;
+    for (const externalId of externalIds) {
+      const result = await fetchDebtByExternalClientId(externalId, { silent: true, skipUiRefresh: true });
+      if (result) {
+        success += 1;
+      } else {
+        failed += 1;
+      }
+    }
+
+    await refreshClientsSnapshotFromBackend({ silent: true });
+    await refreshQueueFromBackend({ silent: true, runSessionId: state.queueSessionId || null });
+    renderDialogs();
+    renderChat();
+    renderClientsDb();
+    renderQueue();
+
+    const missingSuffix = missingExternalIdCount > 0
+      ? `, без externalClientId: ${missingExternalIdCount}`
+      : "";
+    if (failed === 0) {
+      toast(`Сумма долга обновлена для ${success} клиентов${missingSuffix}`);
+      return;
+    }
+    toast(`Сумма долга обновлена для ${success} клиентов, ошибок: ${failed}${missingSuffix}`);
+  } finally {
+    state.bulkDebtInProgress = false;
+    renderClientsBulkUi();
+    renderQueueBulkUi();
+  }
+}
+
+async function bulkFetchDebtForSelectedClients() {
+  await bulkFetchDebtByRows(getSelectedClientRows(), {
+    emptySelectionMessage: "Сначала выберите клиентов в базе",
+    emptyExternalIdMessage: "У выбранных клиентов нет externalClientId для запроса суммы"
+  });
+}
+
+async function bulkFetchDebtForSelectedQueue() {
+  await bulkFetchDebtByRows(getSelectedQueueRows(), {
+    emptySelectionMessage: "Сначала выберите клиентов в очереди",
+    emptyExternalIdMessage: "У выбранных задач нет externalClientId для запроса суммы"
+  });
 }
 
 async function bulkRemoveSelectedFromPlan() {
@@ -4790,7 +6081,7 @@ async function bulkAssignTemplateToQueue() {
     .filter((q) => canApplyTemplateToOverdue(template, q.daysOverdue))
     .map((q) => q.id);
   if (removableJobIds.length === 0) {
-    toast(`Шаблон «${templateDisplayName(template)}» не подходит выбранным клиентам по просрочке или статусу`);
+    toast(`Шаблон «${templateDisplayName(template)}» не подходит выбранным клиентам по правилу просрочки или статусу`);
     return;
   }
   try {
@@ -4904,17 +6195,36 @@ function bindEvents() {
     }
   });
 
+  UI.bindDelegated("typeDefBody", {
+    "type-def-open": (btn) => {
+      const nextId = normalizeTemplateRuleTypeId(btn.dataset.typeId || "");
+      if (!nextId) return;
+      if (state.templateRuleTypeCreateMode || hasTemplateRuleTypeUnsavedChanges()) {
+        const confirmed = window.confirm("Есть несохраненные изменения в типе шаблона. Перейти к другому типу без сохранения?");
+        if (!confirmed) return;
+      }
+      exitTemplateRuleTypeCreateMode();
+      state.selectedTemplateRuleTypeId = nextId;
+      renderTemplateRuleTypeSettings();
+    }
+  });
+
+  UI.bindDelegated("cfgTemplateCommentBody", {
+    "template-comment-open": (btn) => {
+      const templateId = Number(btn.dataset.tplId || 0);
+      const ok = trySelectTemplateCommentTemplate(templateId);
+      if (!ok) return;
+      const input = $("cfgTemplateCommentText");
+      if (input) {
+        input.focus();
+        input.selectionStart = input.selectionEnd = input.value.length;
+      }
+    }
+  });
+
   UI.bindDelegated("clientsDbBody", {
     "client-open-dialog": (btn) => {
       void openDialogByPhone(btn.dataset.clientPhone || "");
-    },
-    "client-fetch-debt": (btn) => {
-      const externalClientId = String(btn.dataset.clientExternalId || "").trim();
-      if (!externalClientId) {
-        toast("Не удалось определить клиента для запроса суммы");
-        return;
-      }
-      void fetchDebtByExternalClientId(externalClientId);
     },
     "client-toggle-stop": async (btn) => {
       const phone = btn.dataset.clientPhone || "";
@@ -4959,14 +6269,6 @@ function bindEvents() {
   UI.bindDelegated("queueBody", {
     "queue-open-dialog": (btn) => {
       void openDialogByPhone(btn.dataset.qPhone || "");
-    },
-    "queue-fetch-debt": (btn) => {
-      const externalClientId = String(btn.dataset.qExternalId || "").trim();
-      if (!externalClientId) {
-        toast("Не удалось определить клиента для запроса суммы");
-        return;
-      }
-      void fetchDebtByExternalClientId(externalClientId);
     },
     "queue-toggle-stop": async (btn) => {
       const phone = btn.dataset.qPhone || "";
@@ -5030,7 +6332,7 @@ function bindEvents() {
     }
     if (!canApplyTemplateToOverdue(nextTemplate, job.daysOverdue)) {
       renderQueue();
-      toast(`Шаблон «${templateDisplayName(nextTemplate)}» не подходит клиенту ${job.phone} по типу просрочки`);
+      toast(`Шаблон «${templateDisplayName(nextTemplate)}» не подходит клиенту ${job.phone} по правилу просрочки`);
       return;
     }
     job.templateId = nextTemplateId;
@@ -5223,6 +6525,10 @@ function bindEvents() {
     const button = $("saveAll");
     button.disabled = true;
     try {
+      if (hasTemplateRuleTypeUnsavedChanges()) {
+        const typeSaved = saveTemplateRuleTypeFromEditor();
+        if (!typeSaved) return;
+      }
       await saveSettings();
     } finally {
       button.disabled = false;
@@ -5245,8 +6551,97 @@ function bindEvents() {
   $("cfgWorkWindowEnd").addEventListener("input", () => {
     void refreshRunForecastFromBackend({ silent: true });
   });
+  if ($("cfgTemplateCommentTemplate")) {
+    $("cfgTemplateCommentTemplate").addEventListener("change", () => {
+      const nextId = Number($("cfgTemplateCommentTemplate").value || 0) || null;
+      const ok = trySelectTemplateCommentTemplate(nextId);
+      if (!ok) {
+        renderTemplateCommentSettings();
+      }
+    });
+  }
+  if ($("cfgTemplateCommentText")) {
+    $("cfgTemplateCommentText").addEventListener("input", () => {
+      renderTemplateCommentSettingsState();
+    });
+  }
+  if ($("cfgTemplateCommentClear")) {
+    $("cfgTemplateCommentClear").addEventListener("click", () => {
+      const input = $("cfgTemplateCommentText");
+      if (!input) return;
+      input.value = "";
+      renderTemplateCommentSettingsState();
+      input.focus();
+    });
+  }
+  if ($("cfgTemplateCommentSave")) {
+    $("cfgTemplateCommentSave").addEventListener("click", async () => {
+      await saveTemplateCommentFromSettings();
+    });
+  }
+  if ($("typeDefName")) {
+    $("typeDefName").addEventListener("input", renderTemplateRuleTypeEditorState);
+  }
+  if ($("typeDefMode")) {
+    $("typeDefMode").addEventListener("change", () => {
+      renderTemplateRuleTypeEditorState();
+    });
+  }
+  if ($("typeDefFrom")) {
+    $("typeDefFrom").addEventListener("input", renderTemplateRuleTypeEditorState);
+  }
+  if ($("typeDefTo")) {
+    $("typeDefTo").addEventListener("input", renderTemplateRuleTypeEditorState);
+  }
+  if ($("typeDefExact")) {
+    $("typeDefExact").addEventListener("input", renderTemplateRuleTypeEditorState);
+  }
+  if ($("typeDefAutoAssign")) {
+    $("typeDefAutoAssign").addEventListener("change", renderTemplateRuleTypeEditorState);
+  }
+  if ($("typeDefNew")) {
+    $("typeDefNew").addEventListener("click", () => {
+      if (hasTemplateRuleTypeUnsavedChanges()) {
+        const confirmed = window.confirm("Есть несохраненные изменения в типе шаблона. Создать новый тип без сохранения текущих изменений?");
+        if (!confirmed) return;
+      }
+      createTemplateRuleType();
+      toast("Режим создания нового типа шаблона включен");
+    });
+  }
+  if ($("typeDefSave")) {
+    $("typeDefSave").addEventListener("click", () => {
+      const ok = saveTemplateRuleTypeFromEditor();
+      if (!ok) return;
+      toast("Тип шаблона сохранен. Нажмите «Сохранить настройки», чтобы применить изменения.");
+    });
+  }
+  if ($("typeDefCancel")) {
+    $("typeDefCancel").addEventListener("click", () => {
+      const ok = cancelTemplateRuleTypeChanges();
+      if (!ok) return;
+      toast("Изменения типа шаблона отменены");
+    });
+  }
+  if ($("typeDefDelete")) {
+    $("typeDefDelete").addEventListener("click", () => {
+      const current = getTemplateRuleTypeById(state.selectedTemplateRuleTypeId);
+      if (!current) {
+        toast("Сначала выберите тип шаблона");
+        return;
+      }
+      const confirmed = window.confirm(`Удалить тип «${current.name}»?`);
+      if (!confirmed) return;
+      const ok = deleteSelectedTemplateRuleType();
+      if (!ok) return;
+      toast("Тип шаблона удален. Нажмите «Сохранить настройки», чтобы применить изменения.");
+    });
+  }
   $("tplType").addEventListener("change", () => {
     ensureTemplateCreateModeFromEditorInput();
+    const selectedKind = normalizeTemplateKind($("tplType").value, { allowMissing: true });
+    $("tplType").value = selectedKind;
+    applyTemplateTypeDefaultsToEditor(selectedKind);
     renderTemplateEditorState();
   });
   $("tplName").addEventListener("input", () => {
@@ -5279,6 +6674,9 @@ function bindEvents() {
   $("clientsClearSelection").addEventListener("click", () => {
     clearClientsSelection();
   });
+  $("clientsBulkFetchDebt").addEventListener("click", () => {
+    void bulkFetchDebtForSelectedClients();
+  });
   $("clientsBulkAddStop").addEventListener("click", () => {
     void bulkAddSelectedClientsToStopList();
   });
@@ -5295,6 +6693,9 @@ function bindEvents() {
   });
   $("queueClearSelection").addEventListener("click", () => {
     clearQueueSelection();
+  });
+  $("queueBulkFetchDebt").addEventListener("click", () => {
+    void bulkFetchDebtForSelectedQueue();
   });
   $("queueBulkAddStop").addEventListener("click", () => {
     void bulkAddSelectedQueueToStopList();
@@ -5582,6 +6983,7 @@ async function init() {
   syncChannelAlertFlags();
   renderAlerts();
   renderChannels();
+  renderTemplateRuleTypeSettings();
   renderTemplates();
   renderTemplateEditorState();
   renderManualPresetManager();

@@ -38,6 +38,12 @@ public sealed class TemplateRecord
     public long Id { get; set; }
     public required string Name { get; set; }
     public required string Kind { get; set; }
+    public required string OverdueMode { get; set; }
+    public int? OverdueFromDays { get; set; }
+    public int? OverdueToDays { get; set; }
+    public int? OverdueExactDay { get; set; }
+    public bool AutoAssign { get; set; }
+    public string? CommentText { get; set; }
     public required string Status { get; set; }
     public required string Text { get; set; }
     public DateTime CreatedAtUtc { get; set; }

@@ -190,6 +190,50 @@
           <button class="primary-btn" id="saveAll">Сохранить настройки</button>
         </div>
 
+        <article class="card" id="templateTypeSettingsCard">
+          <h3>Типы шаблонов по просрочке</h3>
+          <p class="ui-notice ui-notice-info template-type-intro-note">Здесь создаются кастомные типы шаблонов: режим назначения (авто/ручной) и, при необходимости, правило просрочки. В редакторе шаблона выбирается один из этих типов.</p>
+          <div class="manual-preset-layout">
+            <div class="manual-preset-list-wrap">
+              <table class="manual-preset-table">
+                <thead><tr><th>Тип</th><th>Правило</th><th></th></tr></thead>
+                <tbody id="typeDefBody"></tbody>
+              </table>
+            </div>
+            <div class="manual-preset-editor">
+              <label>Название типа<input id="typeDefName" placeholder="Например: 5-10 дней"></label>
+              <label id="typeDefModeWrap">Режим правила просрочки
+                <select id="typeDefMode">
+                  <option value="range">Диапазон дней</option>
+                  <option value="exact">Точный день</option>
+                </select>
+              </label>
+              <label class="inline-toggle">
+                <input id="typeDefAutoAssign" type="checkbox">
+                <span>Только ручное назначение (без автоподбора очереди)</span>
+              </label>
+              <p class="muted-note">Для ручного типа правило просрочки не требуется.</p>
+              <label id="typeDefFromWrap">Просрочка от (дней)
+                <input id="typeDefFrom" type="number" min="0" step="1" placeholder="5">
+              </label>
+              <label id="typeDefToWrap">Просрочка до (дней)
+                <input id="typeDefTo" type="number" min="0" step="1" placeholder="10">
+              </label>
+              <label id="typeDefExactWrap">Точный день просрочки
+                <input id="typeDefExact" type="number" min="0" step="1" placeholder="7">
+              </label>
+              <p class="ui-notice ui-notice-warning" id="typeDefEditorStatus">Выберите тип из списка или создайте новый.</p>
+              <div class="actions manual-preset-editor-actions">
+                <button class="ghost-btn" id="typeDefNew">Создать новый тип</button>
+                <button class="primary-btn" id="typeDefSave">Сохранить тип</button>
+                <button class="ghost-btn" id="typeDefCancel">Отменить изменения</button>
+                <button class="danger-btn" id="typeDefDelete">Удалить тип</button>
+              </div>
+            </div>
+          </div>
+          <p class="muted-note">Изменения типов сохраняются вместе с кнопкой «Сохранить настройки».</p>
+        </article>
+
         <article class="card">
           <h3>Android-каналы (Traccar)</h3>
           <table>
@@ -216,16 +260,33 @@
           </div>
         </article>
 
-        <article class="card">
-          <h3>Настраиваемые тексты комментариев</h3>
-          <div class="grid two">
-            <label>Ранние сообщения (1-2)<input id="cfgCommentSms2" value="смс2"></label>
-            <label>Третье до 30 дней<input id="cfgCommentSms3" value="смс3"></label>
-            <label>Первое сообщение 30+<input id="cfgCommentKa1" value="смс от ка"></label>
-            <label>Повторные 30+ (используйте {n})<input id="cfgCommentKaN" value="смс ка{n}"></label>
-            <label>Финальное 55-59<input id="cfgCommentKaFinal" value="смс ка фин"></label>
+        <article class="card" id="templateCommentSettingsCard">
+          <h3>Комментарии в договор</h3>
+          <p class="ui-notice ui-notice-info template-comment-intro-note">Ниже список уже созданных комментариев. Выберите шаблон из списка и отредактируйте комментарий справа.</p>
+          <div class="manual-preset-layout template-comment-layout">
+            <div class="manual-preset-list-wrap">
+              <table class="manual-preset-table template-comment-table">
+                <thead><tr><th>Шаблон</th><th>Комментарий</th><th></th></tr></thead>
+                <tbody id="cfgTemplateCommentBody"></tbody>
+              </table>
+            </div>
+            <div class="manual-preset-editor template-comment-editor">
+              <label>Шаблон
+                <select id="cfgTemplateCommentTemplate">
+                  <option value="">Загрузка шаблонов...</option>
+                </select>
+              </label>
+              <label>Комментарий, который пишется в договор после отправки выбранного шаблона
+                <textarea id="cfgTemplateCommentText" rows="4" placeholder="Например: смс2"></textarea>
+              </label>
+              <p class="ui-notice ui-notice-warning" id="cfgTemplateCommentStatus">Выберите шаблон для редактирования комментария.</p>
+              <div class="actions">
+                <button class="primary-btn" id="cfgTemplateCommentSave">Сохранить комментарий</button>
+                <button class="ghost-btn" id="cfgTemplateCommentClear">Очистить поле</button>
+              </div>
+            </div>
           </div>
-          <p class="muted-note">Селекторы для поля комментария и кнопки сохранения добавим на этапе бэкенда.</p>
+          <p class="muted-note">Для активного шаблона комментарий обязателен.</p>
         </article>
 
         <article class="card" id="manualPresetCard">
@@ -262,18 +323,27 @@
             <div class="actions slim">
               <button class="ghost-btn" id="tplNew">Создать новый шаблон</button>
             </div>
-            <table>
-              <thead><tr><th>Название</th><th>Тип</th><th>Статус</th><th>Окно просрочки</th><th></th></tr></thead>
-              <tbody id="templatesBody"></tbody>
-            </table>
+            <div class="table-scroll template-table-wrap">
+              <table class="template-table">
+                <thead><tr><th>Название</th><th>Тип</th><th>Статус</th><th>Правило просрочки</th><th>Комментарий</th><th></th></tr></thead>
+                <tbody id="templatesBody"></tbody>
+              </table>
+            </div>
+            <p class="muted-note">Комментарий задается отдельно в настройках: «Комментарии в договор».</p>
           </article>
 
           <article class="card">
             <h3>Редактор шаблона</h3>
-            <label>Тип шаблона
+            <label>Настройки шаблона (тип по просрочке)
               <select id="tplType"></select>
             </label>
-            <p class="ui-notice ui-notice-info" id="tplTypeRule">Выберите тип шаблона. Он определяет, каким клиентам доступен шаблон при автоподборе.</p>
+            <p class="ui-notice ui-notice-info" id="tplTypeRule">Тип выбирается из настроек и задает режим назначения, а для авто-типа и правило просрочки.</p>
+            <input id="tplOverdueMode" type="hidden">
+            <input id="tplOverdueFrom" type="hidden">
+            <input id="tplOverdueTo" type="hidden">
+            <input id="tplOverdueExact" type="hidden">
+            <input id="tplAutoAssign" type="checkbox" hidden>
+            <p class="muted-note template-rule-source-note">Правило просрочки и участие в автоподборе берутся из выбранного типа шаблона.</p>
             <label>Название<input id="tplName"></label>
             <label>Текст<textarea id="tplText" rows="8"></textarea></label>
             <div class="chips">
@@ -287,6 +357,7 @@
               <button class="primary-btn" id="tplPublish">Сделать активным</button>
               <button class="ghost-btn" id="tplCancel">Отменить изменения</button>
             </div>
+            <p class="ui-notice ui-notice-info template-comment-source-note">Комментарий в договор редактируется отдельно: вкладка «Настройки» → «Комментарии в договор».</p>
           </article>
         </div>
       </section>
@@ -329,6 +400,7 @@
             <span class="bulk-meta" id="clientsBulkMeta">Выбрано: 0</span>
             <button class="ghost-btn" id="clientsSelectVisible">Выбрать все</button>
             <button class="ghost-btn" id="clientsClearSelection">Снять выбор</button>
+            <button class="ghost-btn" id="clientsBulkFetchDebt">Узнать сумму</button>
             <button class="ghost-btn" id="clientsBulkAddStop">В стоп-лист</button>
             <button class="ghost-btn" id="clientsBulkRemoveStop">Убрать из стоп-листа</button>
             <button class="ghost-btn" id="clientsBulkReturnPlan">Вернуть в план</button>
@@ -398,6 +470,7 @@
             <span class="bulk-meta" id="queueBulkMeta">Выбрано: 0</span>
             <button class="ghost-btn" id="queueSelectVisible">Выбрать все</button>
             <button class="ghost-btn" id="queueClearSelection">Снять выбор</button>
+            <button class="ghost-btn" id="queueBulkFetchDebt">Узнать сумму</button>
             <button class="ghost-btn" id="queueBulkAddStop">В стоп-лист</button>
             <button class="ghost-btn" id="queueBulkRemoveStop">Убрать из стоп-листа</button>
             <button class="ghost-btn" id="queueBulkRemovePlan">Убрать из плана</button>

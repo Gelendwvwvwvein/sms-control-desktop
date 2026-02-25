@@ -895,22 +895,19 @@ public sealed class RunDispatchService(
             return CommentWriteOutcome.AttemptFailed("COMMENT_SETTINGS_MISSING", detail);
         }
 
-        var commentText = await ResolveCommentTextAsync(
-            db,
-            settings,
-            job,
-            result.TemplateKind,
-            cancellationToken);
+        var commentText = ResolveCommentText(result);
         if (string.IsNullOrWhiteSpace(commentText))
         {
-            var detail = "Не удалось определить текст комментария по правилам.";
+            var detail = result.TemplateId.HasValue && result.TemplateId.Value > 0
+                ? $"Для шаблона id={result.TemplateId.Value} не заполнен комментарий для записи в договор."
+                : "Для задачи не определен шаблон с комментарием для записи в договор.";
             AddEvent(
                 db,
                 runSession.Id,
                 job.Id,
                 "comment_failed",
                 "error",
-                $"Задача #{job.Id}: не удалось определить текст комментария.",
+                $"Задача #{job.Id}: не удалось определить текст комментария для записи в договор.",
                 new
                 {
                     runSessionId = runSession.Id,
@@ -1031,92 +1028,9 @@ public sealed class RunDispatchService(
         return CommentWriteOutcome.AttemptFailed(failedCode, failedDetail);
     }
 
-    private async Task<string> ResolveCommentTextAsync(
-        AppDbContext db,
-        AppSettingsDto settings,
-        RunJobRecord job,
-        string templateKind,
-        CancellationToken cancellationToken)
+    private static string ResolveCommentText(DispatchAttemptResult result)
     {
-        var kind = (templateKind ?? string.Empty).Trim().ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(kind))
-        {
-            kind = ResolveTemplateKindByOverdue(job.DaysOverdue);
-        }
-
-        var rules = settings.CommentRules ?? new CommentRulesDto();
-        return kind switch
-        {
-            "sms1" => CleanCommentText(rules.Sms2, "смс2"),
-            "sms1_regular" => CleanCommentText(rules.Sms2, "смс2"),
-            "sms2" => CleanCommentText(rules.Sms2, "смс2"),
-            "sms3" => CleanCommentText(rules.Sms3, "смс3"),
-            "ka1" => CleanCommentText(rules.Ka1, "смс от ка"),
-            "ka_final" => CleanCommentText(rules.KaFinal, "смс ка фин"),
-            "ka2" => await BuildKaRepeatCommentAsync(db, rules, job, cancellationToken),
-            _ => string.Empty
-        };
-    }
-
-    private static string ResolveTemplateKindByOverdue(int daysOverdue)
-    {
-        return daysOverdue switch
-        {
-            >= 3 and <= 5 => "sms1",
-            >= 6 and <= 20 => "sms2",
-            >= 21 and <= 29 => "sms3",
-            >= 30 and <= 45 => "ka1",
-            >= 46 and <= 50 => "ka2",
-            >= 51 and <= 59 => "ka_final",
-            _ => string.Empty
-        };
-    }
-
-    private async Task<string> BuildKaRepeatCommentAsync(
-        AppDbContext db,
-        CommentRulesDto rules,
-        RunJobRecord job,
-        CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(job.ExternalClientId))
-        {
-            return ExpandKaNRule(CleanCommentText(rules.KaN, "смс ка{n}"), 2);
-        }
-
-        var kaKinds = new[] { "ka1", "ka2", "ka_final" };
-        var previousKaCount = await (
-                from sentJob in db.RunJobs.AsNoTracking()
-                join template in db.Templates.AsNoTracking() on sentJob.TemplateId equals template.Id
-                where sentJob.ExternalClientId == job.ExternalClientId
-                      && sentJob.Id != job.Id
-                      && sentJob.Status == JobStatusSent
-                      && kaKinds.Contains(template.Kind)
-                select sentJob.Id)
-            .CountAsync(cancellationToken);
-
-        var n = Math.Max(2, previousKaCount + 1);
-        return ExpandKaNRule(CleanCommentText(rules.KaN, "смс ка{n}"), n);
-    }
-
-    private static string ExpandKaNRule(string template, int n)
-    {
-        if (string.IsNullOrWhiteSpace(template))
-        {
-            return $"смс ка{Math.Max(2, n)}";
-        }
-
-        var normalizedN = Math.Max(2, n);
-        if (template.Contains("{n}", StringComparison.OrdinalIgnoreCase))
-        {
-            return template.Replace("{n}", normalizedN.ToString(CultureInfo.InvariantCulture), StringComparison.OrdinalIgnoreCase).Trim();
-        }
-
-        return $"{template.Trim()}{normalizedN}";
-    }
-
-    private static string CleanCommentText(string? value, string fallback)
-    {
-        return string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+        return (result.TemplateCommentText ?? string.Empty).Trim();
     }
 
     private static bool IsRetryableCommentError(string? code)
@@ -1497,6 +1411,7 @@ public sealed class RunDispatchService(
             ? activeTemplates.FirstOrDefault(x => x.Id == rendered.TemplateId.Value)
             : null;
         var resolvedTemplateKind = (previewTemplate?.Kind ?? string.Empty).Trim();
+        var resolvedTemplateComment = (previewTemplate?.CommentText ?? string.Empty).Trim();
         var previewPayloadTotal = ExtractPayloadString(job.PayloadJson, "totalWithCommissionRaw");
         var approxDebtText = RuleEngineService.BuildApproxDebtText(job.PayloadJson);
         job.PreviewStatus = PreviewStatusReady;
@@ -1535,6 +1450,7 @@ public sealed class RunDispatchService(
                 MessageText = rendered.MessageText,
                 TemplateId = rendered.TemplateId,
                 TemplateKind = resolvedTemplateKind,
+                TemplateCommentText = resolvedTemplateComment,
                 UsedMessageOverride = usesMessageOverride,
                 StatusCode = sendResult.StatusCode,
                 ResponseBody = sendResult.ResponseBody,
@@ -1551,6 +1467,7 @@ public sealed class RunDispatchService(
             MessageText = rendered.MessageText,
             TemplateId = rendered.TemplateId,
             TemplateKind = resolvedTemplateKind,
+            TemplateCommentText = resolvedTemplateComment,
             UsedMessageOverride = usesMessageOverride,
             StatusCode = sendResult.StatusCode,
             ResponseBody = sendResult.ResponseBody,
@@ -1841,6 +1758,7 @@ public sealed class RunDispatchService(
         public string MessageText { get; init; } = string.Empty;
         public long? TemplateId { get; init; }
         public string TemplateKind { get; init; } = string.Empty;
+        public string TemplateCommentText { get; init; } = string.Empty;
         public bool UsedMessageOverride { get; init; }
         public int StatusCode { get; init; }
         public string ResponseBody { get; init; } = string.Empty;
