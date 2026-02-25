@@ -313,8 +313,24 @@ static bool HasPlaywrightDriverLayoutAt(string rootPath)
         return false;
     }
 
-    return File.Exists(Path.Combine(rootPath, "package", "cli.js")) &&
-           Directory.Exists(Path.Combine(rootPath, "node"));
+    if (!File.Exists(Path.Combine(rootPath, "package", "cli.js")))
+    {
+        return false;
+    }
+
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    {
+        return File.Exists(Path.Combine(rootPath, "node", "win32_x64", "node.exe"));
+    }
+
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+    {
+        return File.Exists(Path.Combine(rootPath, "node", "darwin-arm64", "node")) ||
+               File.Exists(Path.Combine(rootPath, "node", "darwin-x64", "node"));
+    }
+
+    return File.Exists(Path.Combine(rootPath, "node", "linux-x64", "node")) ||
+           File.Exists(Path.Combine(rootPath, "node", "linux-arm64", "node"));
 }
 
 static async Task LaunchDesktopAsync(string[] args)
