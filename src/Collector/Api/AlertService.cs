@@ -330,8 +330,16 @@ public sealed class AlertService
         var normalizedPhone = string.IsNullOrWhiteSpace(phone) ? "без номера" : phone.Trim();
         var normalizedFio = string.IsNullOrWhiteSpace(clientFio) ? string.Empty : clientFio.Trim();
         var fioSuffix = string.IsNullOrWhiteSpace(normalizedFio) ? string.Empty : $" ({normalizedFio})";
+        var normalizedDetail = string.IsNullOrWhiteSpace(detail)
+            ? string.Empty
+            : detail.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        if (normalizedDetail.Length > 240)
+        {
+            normalizedDetail = $"{normalizedDetail[..240]}...";
+        }
+        var detailSuffix = string.IsNullOrWhiteSpace(normalizedDetail) ? string.Empty : $" Детали: {normalizedDetail}";
 
-        var text = $"Не удалось отправить SMS клиенту {normalizedPhone}{fioSuffix} (job #{runJobId}, code={normalizedCode}).";
+        var text = $"Не удалось отправить SMS клиенту {normalizedPhone}{fioSuffix} (job #{runJobId}, code={normalizedCode}).{detailSuffix}";
         if (text.Length > 1024)
         {
             text = text[..1024];

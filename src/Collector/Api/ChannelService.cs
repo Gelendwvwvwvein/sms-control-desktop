@@ -1,3 +1,5 @@
+using System.Net;
+using System.Net.Http.Json;
 using Collector.Data;
 using Collector.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -193,21 +195,11 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
 
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-
-        try
-        {
-            var response = await httpClient.GetAsync(channel.Endpoint, linkedCts.Token);
-            ok = true;
-            detail = $"HTTP {(int)response.StatusCode}";
-        }
-        catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
-        {
-            detail = $"Timeout after {timeoutMs}ms";
-        }
-        catch (Exception ex)
-        {
-            detail = ex.Message;
-        }
+        (ok, detail) = await CheckGatewayEndpointAsync(
+            channel.Endpoint,
+            channel.Token,
+            cancellationToken,
+            linkedCts.Token);
 
         channel.LastCheckedAtUtc = checkedAt;
         if (ok)
@@ -327,6 +319,143 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
         return Math.Clamp(timeoutMs, 1000, 60000);
     }
 
+    private async Task<(bool Ok, string Detail)> CheckGatewayEndpointAsync(
+        string endpoint,
+        string token,
+        CancellationToken externalCancellationToken,
+        CancellationToken probeCancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(token))
+        {
+            return (false, "У канала не задан endpoint или token.");
+        }
+
+        var withToken = await SendProbeAsync(endpoint, token, externalCancellationToken, probeCancellationToken);
+        if (!withToken.TransportOk)
+        {
+            return (false, withToken.ErrorDetail);
+        }
+
+        var statusCode = withToken.StatusCode;
+        if (!statusCode.HasValue)
+        {
+            return (false, "Проверка канала завершилась без HTTP-статуса.");
+        }
+
+        if (statusCode.Value is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+        {
+            return (false, $"Токен канала отклонен gateway: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
+        }
+
+        if (statusCode.Value is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed)
+        {
+            return (false, $"Endpoint канала не подходит для отправки SMS: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
+        }
+
+        if (statusCode.Value == HttpStatusCode.ServiceUnavailable || (int)statusCode.Value >= 500)
+        {
+            return (false, $"Gateway временно недоступен: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
+        }
+
+        if (statusCode.Value is HttpStatusCode.BadRequest or HttpStatusCode.UnprocessableEntity)
+        {
+            var withoutToken = await SendProbeAsync(endpoint, null, externalCancellationToken, probeCancellationToken);
+            if (withoutToken.TransportOk &&
+                withoutToken.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                return (true,
+                    $"Gateway доступен для отправки: HTTP {(int)statusCode.Value} ({statusCode.Value}) на probe-пэйлоад, токен валиден.");
+            }
+
+            return (true,
+                $"Gateway ответил HTTP {(int)statusCode.Value} ({statusCode.Value}) на probe-пэйлоад. Маршрут доступен.");
+        }
+
+        if ((int)statusCode.Value >= 200 && (int)statusCode.Value < 300)
+        {
+            var bodySuffix = BuildBodySuffix(withToken.ResponseBody);
+            return (true, $"Gateway доступен: HTTP {(int)statusCode.Value} ({statusCode.Value}).{bodySuffix}");
+        }
+
+        if (statusCode.Value == HttpStatusCode.TooManyRequests)
+        {
+            return (false, $"Gateway ограничил запросы: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
+        }
+
+        return (false, $"Неожиданный ответ gateway: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
+    }
+
+    private async Task<ProbeResult> SendProbeAsync(
+        string endpoint,
+        string? token,
+        CancellationToken externalCancellationToken,
+        CancellationToken probeCancellationToken)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
+            if (!string.IsNullOrWhiteSpace(token))
+            {
+                request.Headers.TryAddWithoutValidation("Authorization", token.Trim());
+            }
+
+            // Intentionally invalid payload to avoid sending real SMS during health-check.
+            request.Content = JsonContent.Create(new
+            {
+                to = "",
+                message = ""
+            });
+
+            using var response = await httpClient.SendAsync(request, probeCancellationToken);
+            var body = await response.Content.ReadAsStringAsync(probeCancellationToken);
+            return new ProbeResult(
+                TransportOk: true,
+                StatusCode: response.StatusCode,
+                ResponseBody: body,
+                ErrorDetail: string.Empty);
+        }
+        catch (OperationCanceledException) when (externalCancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return new ProbeResult(
+                TransportOk: false,
+                StatusCode: null,
+                ResponseBody: string.Empty,
+                ErrorDetail: "Таймаут при проверке канала.");
+        }
+        catch (Exception ex)
+        {
+            return new ProbeResult(
+                TransportOk: false,
+                StatusCode: null,
+                ResponseBody: string.Empty,
+                ErrorDetail: ex.Message);
+        }
+    }
+
+    private static string BuildBodySuffix(string responseBody)
+    {
+        var normalized = (responseBody ?? string.Empty)
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return string.Empty;
+        }
+
+        const int maxLen = 160;
+        if (normalized.Length > maxLen)
+        {
+            normalized = $"{normalized[..maxLen]}...";
+        }
+
+        return $" Ответ: {normalized}";
+    }
+
     private static string NormalizeEndpoint(string endpoint)
     {
         return endpoint.Trim().TrimEnd('/') + "/";
@@ -380,4 +509,10 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
         if (trimmed.Length <= 4) return "****";
         return $"{trimmed[..2]}****{trimmed[^2..]}";
     }
+
+    private readonly record struct ProbeResult(
+        bool TransportOk,
+        HttpStatusCode? StatusCode,
+        string ResponseBody,
+        string ErrorDetail);
 }

@@ -23,7 +23,7 @@
 - `RunService`: состояния сессии запуска (planned/running/stopped/completed), старт/стоп.
 - `RunDispatchService`: фоновые тики отправки, перезапуски/retry, failover каналов, запись комментариев.
 - `DialogService`: диалоги, история исходящих, ручная отправка, черновики, очистка старых диалогов.
-- `ChannelService`: CRUD каналов, health-check, статусы `online/unknown/offline/error`.
+- `ChannelService`: CRUD каналов, health-check (POST probe с Authorization/token), статусы `online/unknown/offline/error`.
 - `AlertService`: карточки уведомлений и смена статуса (`active/resolved/irrelevant`).
 - `DebtCacheService`: получение и кэш суммы долга из карточки клиента.
 - `RocketmanCommentService`: запись комментария в карточку клиента через Playwright.

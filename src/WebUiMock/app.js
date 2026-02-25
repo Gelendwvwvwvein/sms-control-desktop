@@ -4165,15 +4165,17 @@ async function checkChannelById(channelId, options = {}) {
     });
     await refreshChannelsFromBackend({ silent: true });
     await refreshAlertsFromBackend({ silent: true });
+    const detail = String(result?.detail || "").trim();
+    const detailSuffix = detail ? ` (${detail})` : "";
     if (result?.status === "online") {
-      if (!silent) toast(`${channel.name}: канал работает`);
+      if (!silent) toast(`${channel.name}: канал работает${detailSuffix}`);
       return true;
     }
     if (result?.status === "offline") {
-      if (!silent) toast(`${channel.name}: канал отключен вручную`);
+      if (!silent) toast(`${channel.name}: канал отключен вручную${detailSuffix}`);
       return false;
     }
-    if (!silent) toast(`${channel.name}: канал не отвечает, проверьте устройство`);
+    if (!silent) toast(`${channel.name}: канал не прошел проверку${detailSuffix}`);
     return false;
   } catch (error) {
     if (!silent) toast(`${channel.name}: ошибка проверки канала (${error?.message || "backend"})`);

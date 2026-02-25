@@ -544,7 +544,7 @@ public sealed class RunDispatchService(
                     job.Id,
                     "job_failed",
                     "error",
-                    $"Задача #{job.Id} завершилась ошибкой: {result.Code}.",
+                    $"Задача #{job.Id} завершилась ошибкой: {result.Code}.{BuildLogDetailSuffix(result.Detail)}",
                     new
                     {
                         runJobId = job.Id,
@@ -589,7 +589,7 @@ public sealed class RunDispatchService(
                     job.Id,
                     "job_retry",
                     "warning",
-                    $"Задача #{job.Id} переведена в retry: {result.Code}.",
+                    $"Задача #{job.Id} переведена в retry: {result.Code}.{BuildLogDetailSuffix(result.Detail)}",
                     new
                     {
                         runJobId = job.Id,
@@ -1547,7 +1547,7 @@ public sealed class RunDispatchService(
             Success = false,
             IsTransient = IsTransientGatewayError(sendResult.StatusCode),
             Code = "GATEWAY_SEND_FAILED",
-            Detail = $"{sendResult.Detail} (HTTP {sendResult.StatusCode})",
+            Detail = BuildGatewayFailureDetail(sendResult),
             MessageText = rendered.MessageText,
             TemplateId = rendered.TemplateId,
             TemplateKind = resolvedTemplateKind,
@@ -1561,6 +1561,60 @@ public sealed class RunDispatchService(
     private static bool IsChannelStateNeutralError(string? code)
     {
         return string.Equals(code, "CHANNEL_UNAVAILABLE", StringComparison.Ordinal);
+    }
+
+    private static string BuildGatewayFailureDetail(TraccarSmsSendResult sendResult)
+    {
+        var normalizedDetail = TruncateForLog(sendResult.Detail, 240);
+        var normalizedBody = TruncateForLog(sendResult.ResponseBody, 240);
+        var normalizedError = TruncateForLog(sendResult.Error, 200);
+        var statusPart = sendResult.StatusCode > 0 ? $"HTTP {sendResult.StatusCode}" : string.Empty;
+
+        var parts = new[]
+        {
+            normalizedDetail,
+            statusPart,
+            string.IsNullOrWhiteSpace(normalizedBody) ? string.Empty : $"Ответ gateway: {normalizedBody}",
+            string.IsNullOrWhiteSpace(normalizedError) ? string.Empty : $"Ошибка транспорта: {normalizedError}"
+        };
+
+        var composed = string.Join(
+            ". ",
+            parts.Where(x => !string.IsNullOrWhiteSpace(x)));
+
+        return string.IsNullOrWhiteSpace(composed)
+            ? "Ошибка отправки через gateway."
+            : composed;
+    }
+
+    private static string TruncateForLog(string? value, int maxLen)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var normalized = value
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Trim();
+        if (normalized.Length > maxLen)
+        {
+            normalized = $"{normalized[..maxLen]}...";
+        }
+
+        return normalized;
+    }
+
+    private static string BuildLogDetailSuffix(string? detail)
+    {
+        var raw = TruncateForLog(detail, 240);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return string.Empty;
+        }
+
+        return $" Детали: {raw}";
     }
 
     private static bool IsTransientGatewayError(int statusCode)

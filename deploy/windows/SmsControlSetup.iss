@@ -13,6 +13,7 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
 UninstallDisplayIcon={app}\Collector.exe
+SetupIconFile=..\..\src\WebUiMock\favicon.ico
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
@@ -21,10 +22,11 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Source: "..\..\out\publish\win-x64\*"; DestDir: "{app}"; Excludes: ".playwright\*,ms-playwright\*"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\..\out\publish\win-x64\.playwright\*"; DestDir: "{app}\.playwright"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 Source: "..\..\out\publish\win-x64\ms-playwright\*"; DestDir: "{app}\ms-playwright"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+Source: "..\..\src\WebUiMock\favicon.ico"; DestDir: "{app}"; DestName: "SmsControl.ico"; Flags: ignoreversion
 
 [Icons]
-Name: "{autodesktop}\SMS Control"; Filename: "{app}\Collector.exe"; Parameters: "--desktop --port 5057"; WorkingDir: "{app}"; IconFilename: "{app}\Collector.exe"
-Name: "{group}\SMS Control"; Filename: "{app}\Collector.exe"; Parameters: "--desktop --port 5057"; WorkingDir: "{app}"; IconFilename: "{app}\Collector.exe"
+Name: "{autodesktop}\SMS Control"; Filename: "{app}\Collector.exe"; Parameters: "--desktop --port 5057"; WorkingDir: "{app}"; IconFilename: "{app}\SmsControl.ico"
+Name: "{group}\SMS Control"; Filename: "{app}\Collector.exe"; Parameters: "--desktop --port 5057"; WorkingDir: "{app}"; IconFilename: "{app}\SmsControl.ico"
 Name: "{group}\Удалить SMS Control"; Filename: "{uninstallexe}"
 
 [Run]
