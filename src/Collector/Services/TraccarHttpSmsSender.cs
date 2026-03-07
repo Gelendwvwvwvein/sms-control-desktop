@@ -1,10 +1,18 @@
 using System.Net;
-using System.Net.Http.Json;
+using System.Net.Http.Headers;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 
 namespace Collector.Services;
 
 public sealed class TraccarHttpSmsSender
 {
+    private static readonly JsonSerializerOptions PayloadJsonOptions = new()
+    {
+        // Keep payload ASCII-safe so gateway behavior does not depend on console/system code pages.
+        Encoder = JavaScriptEncoder.Default
+    };
+
     private readonly HttpClient _httpClient;
 
     public TraccarHttpSmsSender(HttpClient? httpClient = null)
@@ -28,11 +36,7 @@ public sealed class TraccarHttpSmsSender
 
         var msg = new HttpRequestMessage(HttpMethod.Post, uri);
         msg.Headers.TryAddWithoutValidation("Authorization", request.Token);
-        msg.Content = JsonContent.Create(new
-        {
-            to = request.To,
-            message = request.Message
-        });
+        msg.Content = BuildSmsPayloadContent(request);
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         if (request.TimeoutMs > 0)
@@ -85,6 +89,22 @@ public sealed class TraccarHttpSmsSender
                 Error = ex.Message
             };
         }
+    }
+
+    private static ByteArrayContent BuildSmsPayloadContent(TraccarSmsSendRequest request)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            to = request.To,
+            message = request.Message
+        }, PayloadJsonOptions);
+
+        var content = new ByteArrayContent(bytes);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json")
+        {
+            CharSet = "utf-8"
+        };
+        return content;
     }
 }
 

@@ -47,6 +47,7 @@ public sealed class BulkChannelCheckResultDto
 {
     public int Total { get; set; }
     public int Online { get; set; }
+    public int Unknown { get; set; }
     public int Error { get; set; }
     public List<ChannelCheckResultDto> Results { get; set; } = [];
 }

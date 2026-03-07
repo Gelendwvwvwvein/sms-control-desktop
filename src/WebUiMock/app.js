@@ -5387,6 +5387,10 @@ async function checkChannelById(channelId, options = {}) {
       if (!silent) toast(`${channel.name}: канал отключен вручную${detailSuffix}`);
       return false;
     }
+    if (result?.status === "unknown") {
+      if (!silent) toast(`${channel.name}: gateway достижим, но probe-проверка неинформативна${detailSuffix}`);
+      return true;
+    }
     if (!silent) toast(`${channel.name}: канал не прошел проверку${detailSuffix}`);
     return false;
   } catch (error) {
@@ -5437,7 +5441,12 @@ async function checkChannels() {
     await refreshAlertsFromBackend({ silent: true });
     updateMetrics();
     const online = Number(result?.online || 0);
+    const unknown = Number(result?.unknown || 0);
     const total = Number(result?.total || state.channels.length);
+    if (unknown > 0) {
+      toast(`Проверка каналов завершена: онлайн ${online}, неинформативный probe ${unknown}, всего ${total}`);
+      return;
+    }
     toast(`Проверка каналов завершена: ${online}/${total} каналов онлайн`);
   } catch (error) {
     toast(`Не удалось проверить каналы: ${error?.message || "ошибка backend"}`);

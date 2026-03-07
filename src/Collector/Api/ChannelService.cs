@@ -157,6 +157,7 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
         }
 
         output.Online = output.Results.Count(x => x.Status == "online");
+        output.Unknown = output.Results.Count(x => x.Status == StatusUnknown);
         output.Error = output.Results.Count(x => x.Status == StatusError);
         await db.SaveChangesAsync(cancellationToken);
         var stateChanged = channels.Any(x =>
@@ -177,7 +178,6 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
     {
         var checkedAt = DateTime.UtcNow;
         var detail = string.Empty;
-        var ok = false;
 
         if (string.Equals(channel.Status, StatusOffline, StringComparison.OrdinalIgnoreCase))
         {
@@ -195,19 +195,31 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
 
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
-        (ok, detail) = await CheckGatewayEndpointAsync(
+        var assessment = await CheckGatewayEndpointAsync(
             channel.Endpoint,
             channel.Token,
             cancellationToken,
             linkedCts.Token);
+        detail = assessment.Detail;
 
         channel.LastCheckedAtUtc = checkedAt;
-        if (ok)
+        if (assessment.Status == StatusOnline)
         {
             channel.Status = StatusOnline;
             channel.FailStreak = 0;
             channel.Alerted = false;
             await alerts.ResolveChannelAlertsAsync(db, channel.Id, "Канал успешно прошел health-check.", cancellationToken);
+        }
+        else if (assessment.Status == StatusUnknown)
+        {
+            channel.Status = StatusUnknown;
+            channel.FailStreak = 0;
+            channel.Alerted = false;
+            await alerts.ResolveChannelAlertsAsync(
+                db,
+                channel.Id,
+                "Gateway достижим, но probe-проверка не дала однозначного результата.",
+                cancellationToken);
         }
         else
         {
@@ -319,7 +331,7 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
         return Math.Clamp(timeoutMs, 1000, 60000);
     }
 
-    private async Task<(bool Ok, string Detail)> CheckGatewayEndpointAsync(
+    private async Task<GatewayHealthAssessment> CheckGatewayEndpointAsync(
         string endpoint,
         string token,
         CancellationToken externalCancellationToken,
@@ -327,34 +339,45 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
     {
         if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(token))
         {
-            return (false, "У канала не задан endpoint или token.");
+            return GatewayHealthAssessment.Error("У канала не задан endpoint или token.");
         }
 
         var withToken = await SendProbeAsync(endpoint, token, externalCancellationToken, probeCancellationToken);
         if (!withToken.TransportOk)
         {
-            return (false, withToken.ErrorDetail);
+            return GatewayHealthAssessment.Error(withToken.ErrorDetail);
         }
 
         var statusCode = withToken.StatusCode;
         if (!statusCode.HasValue)
         {
-            return (false, "Проверка канала завершилась без HTTP-статуса.");
+            return GatewayHealthAssessment.Error("Проверка канала завершилась без HTTP-статуса.");
         }
 
         if (statusCode.Value is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
         {
-            return (false, $"Токен канала отклонен gateway: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
+            return GatewayHealthAssessment.Error(
+                $"Токен канала отклонен gateway: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
         }
 
         if (statusCode.Value is HttpStatusCode.NotFound or HttpStatusCode.MethodNotAllowed)
         {
-            return (false, $"Endpoint канала не подходит для отправки SMS: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
+            return GatewayHealthAssessment.Error(
+                $"Endpoint канала не подходит для отправки SMS: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
+        }
+
+        if (statusCode.Value == HttpStatusCode.InternalServerError)
+        {
+            return GatewayHealthAssessment.Unknown(
+                "Gateway достижим, но вернул HTTP 500 на пустой probe-пэйлоад. " +
+                "Для некоторых версий Traccar это означает, что health-check неинформативен, " +
+                "хотя реальная отправка SMS работает.");
         }
 
         if (statusCode.Value == HttpStatusCode.ServiceUnavailable || (int)statusCode.Value >= 500)
         {
-            return (false, $"Gateway временно недоступен: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
+            return GatewayHealthAssessment.Error(
+                $"Gateway временно недоступен: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
         }
 
         if (statusCode.Value is HttpStatusCode.BadRequest or HttpStatusCode.UnprocessableEntity)
@@ -363,26 +386,29 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
             if (withoutToken.TransportOk &&
                 withoutToken.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             {
-                return (true,
+                return GatewayHealthAssessment.Online(
                     $"Gateway доступен для отправки: HTTP {(int)statusCode.Value} ({statusCode.Value}) на probe-пэйлоад, токен валиден.");
             }
 
-            return (true,
+            return GatewayHealthAssessment.Online(
                 $"Gateway ответил HTTP {(int)statusCode.Value} ({statusCode.Value}) на probe-пэйлоад. Маршрут доступен.");
         }
 
         if ((int)statusCode.Value >= 200 && (int)statusCode.Value < 300)
         {
             var bodySuffix = BuildBodySuffix(withToken.ResponseBody);
-            return (true, $"Gateway доступен: HTTP {(int)statusCode.Value} ({statusCode.Value}).{bodySuffix}");
+            return GatewayHealthAssessment.Online(
+                $"Gateway доступен: HTTP {(int)statusCode.Value} ({statusCode.Value}).{bodySuffix}");
         }
 
         if (statusCode.Value == HttpStatusCode.TooManyRequests)
         {
-            return (false, $"Gateway ограничил запросы: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
+            return GatewayHealthAssessment.Error(
+                $"Gateway ограничил запросы: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
         }
 
-        return (false, $"Неожиданный ответ gateway: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
+        return GatewayHealthAssessment.Error(
+            $"Неожиданный ответ gateway: HTTP {(int)statusCode.Value} ({statusCode.Value}).");
     }
 
     private async Task<ProbeResult> SendProbeAsync(
@@ -515,4 +541,11 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
         HttpStatusCode? StatusCode,
         string ResponseBody,
         string ErrorDetail);
+
+    private readonly record struct GatewayHealthAssessment(string Status, string Detail)
+    {
+        public static GatewayHealthAssessment Online(string detail) => new(StatusOnline, detail);
+        public static GatewayHealthAssessment Unknown(string detail) => new(StatusUnknown, detail);
+        public static GatewayHealthAssessment Error(string detail) => new(StatusError, detail);
+    }
 }
