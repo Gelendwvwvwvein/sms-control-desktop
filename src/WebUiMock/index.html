@@ -93,7 +93,7 @@
                     <button class="ghost-btn" id="runOverdueClearAll">Снять все</button>
                   </div>
                 </div>
-                <div class="check-grid compact">
+                <div class="check-grid compact" id="runOverdueFilterBlock">
                   <label><input type="checkbox" class="run-overdue" value="3-15" checked> Просрочка 3-15</label>
                   <label><input type="checkbox" class="run-overdue" value="16-29" checked> Просрочка 16-29</label>
                   <label><input type="checkbox" class="run-overdue" value="30-45" checked> Просрочка 30-45</label>
@@ -102,7 +102,7 @@
               </div>
             </div>
             <label>Точная просрочка (день, опционально)
-              <input type="number" id="runExactDay" min="3" max="59" placeholder="Например 30">
+              <input type="text" id="runExactDay" inputmode="numeric" placeholder="Например 30 или 5-15">
             </label>
             <div class="actions">
               <button class="ghost-btn" id="runSelectAll">Выбрать всё</button>
@@ -154,6 +154,24 @@
           <h3>Живой лог выполнения</h3>
           <div class="log" id="runLog"></div>
         </article>
+        <article class="card">
+          <div class="filter-group-head">
+            <h3>История запусков</h3>
+            <div class="actions slim">
+              <button class="ghost-btn" id="runHistoryRefresh">Обновить</button>
+              <button class="danger-btn" id="runHistoryClear">Очистить историю</button>
+            </div>
+          </div>
+          <p class="muted-note">Показываются прошлые сессии. Текущая активная или последняя плановая очередь при очистке не удаляется.</p>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr><th>Сессия</th><th>Создана</th><th>Старт</th><th>Финиш</th><th>Статус</th><th>Итог</th><th>Заметка</th></tr>
+              </thead>
+              <tbody id="runHistoryBody"></tbody>
+            </table>
+          </div>
+        </article>
       </section>
 
       <section class="tab-screen" id="tab-settings">
@@ -173,6 +191,10 @@
           <article class="card">
             <h3>Правила отправки</h3>
             <label>Интервал между SMS (мин)<input id="cfgGap" type="number" min="1" value="8"></label>
+            <label>Не писать повторно, если уже отправляли SMS за последние N дней
+              <input id="cfgRecentSmsCooldownDays" type="number" min="0" max="365" value="0">
+            </label>
+            <p class="muted-note">0 означает, что ограничение выключено. Сравнение идет по календарным датам на этом ПК, без учета часов.</p>
             <div class="form-row">
               <label>Рабочее окно: начало<input id="cfgWorkWindowStart" type="time" value="08:00"></label>
               <label>Рабочее окно: конец<input id="cfgWorkWindowEnd" type="time" value="21:00"></label>
@@ -497,7 +519,14 @@
 
       <section class="tab-screen" id="tab-dialogs">
         <div class="dialog-layout">
-          <aside class="dialog-list" id="dialogList"></aside>
+          <aside>
+            <div class="filters">
+              <label>РџРѕРёСЃРє
+                <input id="dialogsSearch" placeholder="Р¤РРћ, С‚РµР»РµС„РѕРЅ РёР»Рё в„– РґРѕРіРѕРІРѕСЂР°">
+              </label>
+            </div>
+            <div class="dialog-list" id="dialogList"></div>
+          </aside>
           <article class="card dialog-main">
             <h3 id="dialogTitle">Выберите клиента</h3>
             <div class="dialog-maintenance">

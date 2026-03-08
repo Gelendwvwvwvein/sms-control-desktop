@@ -1206,9 +1206,11 @@ table tr.active-row td {
 }
 
 .pill.queued { background: #ece8dd; color: #5f5644; }
+.pill.planned { background: #edf0f7; color: #3b4b61; }
 .pill.running { background: #dff4ff; color: #1d5d7a; }
 .pill.retry { background: #f6ecff; color: #6c3fa0; }
 .pill.stopped { background: #f1f1f1; color: #4a4a4a; }
+.pill.completed { background: #def7ea; color: #1f6b4b; }
 .pill.sent { background: #def7ea; color: #1f6b4b; }
 .pill.failed { background: #fbe5e5; color: #8f2f2f; }
 .pill.active { background: #def7ea; color: #1f6b4b; }

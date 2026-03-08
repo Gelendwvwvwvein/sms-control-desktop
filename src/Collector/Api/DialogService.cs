@@ -23,15 +23,43 @@ public sealed class DialogService(SettingsStore settingsStore, AlertService aler
         CancellationToken cancellationToken)
     {
         var searchNormalized = (search ?? string.Empty).Trim();
+        var latestSnapshotId = await db.ClientSnapshots
+            .AsNoTracking()
+            .OrderByDescending(x => x.Id)
+            .Select(x => x.Id)
+            .FirstOrDefaultAsync(cancellationToken);
 
         IQueryable<MessageRecord> baseQuery = db.Messages.AsNoTracking();
         if (!string.IsNullOrWhiteSpace(searchNormalized))
         {
             var searchPhone = NormalizePhone(searchNormalized);
+            var snapshotMatchedPhones = new List<string>();
+            if (latestSnapshotId > 0)
+            {
+                var snapshotPhoneRows = await db.ClientSnapshotRows
+                    .AsNoTracking()
+                    .Where(x =>
+                        x.SnapshotId == latestSnapshotId &&
+                        (x.Fio.Contains(searchNormalized) ||
+                         x.ExternalClientId.Contains(searchNormalized) ||
+                         x.Phone.Contains(searchNormalized) ||
+                         (!string.IsNullOrWhiteSpace(searchPhone) && x.Phone.Contains(searchPhone))))
+                    .Select(x => x.Phone)
+                    .ToListAsync(cancellationToken);
+
+                snapshotMatchedPhones = snapshotPhoneRows
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Select(NormalizePhone)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+            }
+
             baseQuery = baseQuery.Where(x =>
                 x.ClientPhone.Contains(searchNormalized) ||
                 x.Text.Contains(searchNormalized) ||
-                (!string.IsNullOrWhiteSpace(searchPhone) && x.ClientPhone.Contains(searchPhone)));
+                (!string.IsNullOrWhiteSpace(searchPhone) && x.ClientPhone.Contains(searchPhone)) ||
+                snapshotMatchedPhones.Contains(x.ClientPhone));
         }
 
         var grouped = await baseQuery
@@ -78,22 +106,17 @@ public sealed class DialogService(SettingsStore settingsStore, AlertService aler
             .GroupBy(x => x.ClientPhone)
             .ToDictionary(x => x.Key, x => x.First());
 
-        var latestSnapshotId = await db.ClientSnapshots
-            .AsNoTracking()
-            .OrderByDescending(x => x.Id)
-            .Select(x => x.Id)
-            .FirstOrDefaultAsync(cancellationToken);
-
         var fioByPhone = new Dictionary<string, string>(StringComparer.Ordinal);
+        var contractNumberByPhone = new Dictionary<string, string>(StringComparer.Ordinal);
         if (latestSnapshotId > 0)
         {
-            var fioRows = await db.ClientSnapshotRows
+            var snapshotRows = await db.ClientSnapshotRows
                 .AsNoTracking()
                 .Where(x => x.SnapshotId == latestSnapshotId && phones.Contains(x.Phone))
-                .Select(x => new { x.Phone, x.Fio, x.CollectedAtUtc, x.Id })
+                .Select(x => new { x.Phone, x.Fio, x.ExternalClientId, x.CollectedAtUtc, x.Id })
                 .ToListAsync(cancellationToken);
 
-            fioByPhone = fioRows
+            fioByPhone = snapshotRows
                 .GroupBy(x => x.Phone)
                 .ToDictionary(
                     x => x.Key,
@@ -101,6 +124,17 @@ public sealed class DialogService(SettingsStore settingsStore, AlertService aler
                         .OrderByDescending(v => v.CollectedAtUtc)
                         .ThenByDescending(v => v.Id)
                         .Select(v => v.Fio ?? string.Empty)
+                        .FirstOrDefault() ?? string.Empty,
+                    StringComparer.Ordinal);
+
+            contractNumberByPhone = snapshotRows
+                .GroupBy(x => x.Phone)
+                .ToDictionary(
+                    x => x.Key,
+                    x => x
+                        .OrderByDescending(v => v.CollectedAtUtc)
+                        .ThenByDescending(v => v.Id)
+                        .Select(v => v.ExternalClientId ?? string.Empty)
                         .FirstOrDefault() ?? string.Empty,
                     StringComparer.Ordinal);
         }
@@ -149,6 +183,7 @@ public sealed class DialogService(SettingsStore settingsStore, AlertService aler
         {
             latestByPhone.TryGetValue(x.Phone, out var last);
             fioByPhone.TryGetValue(x.Phone, out var fio);
+            contractNumberByPhone.TryGetValue(x.Phone, out var contractNumber);
             channelMetaByPhone.TryGetValue(x.Phone, out var channelMeta);
             var channelId = channelMeta.ChannelId;
             var channelName = channelMeta.ChannelName;
@@ -167,6 +202,7 @@ public sealed class DialogService(SettingsStore settingsStore, AlertService aler
                 DialogId = BuildDialogId(x.Phone),
                 Phone = x.Phone,
                 Fio = fio ?? string.Empty,
+                ContractNumber = contractNumber ?? string.Empty,
                 LastMessageAtUtc = x.LastMessageAtUtc,
                 LastDirection = last?.Direction ?? string.Empty,
                 LastText = last?.Text ?? string.Empty,

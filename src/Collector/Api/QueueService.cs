@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Collector.Api;
 
-public sealed partial class QueueService(RuleEngineService ruleEngine)
+public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsStore settingsStore)
 {
     private const string ChannelStatusError = "error";
     private const string ChannelStatusOffline = "offline";
@@ -27,6 +27,9 @@ public sealed partial class QueueService(RuleEngineService ruleEngine)
     private const string PreviewStatusNeedsDebt = "needs_debt";
     private const string PreviewStatusError = "error";
     private const string PayloadFieldMessageOverride = "messageOverrideText";
+    private const string QueueExactOverdueLegacyErrorCode = "QUEUE_FILTER_EXACT_DAY_INVALID";
+    private const string MessageDirectionOut = "out";
+    private const string MessageGatewayStatusSent = "sent";
 
     public static ApiErrorDto? ValidateRequest(QueueFilterRequestDto? payload)
     {
@@ -51,7 +54,13 @@ public sealed partial class QueueService(RuleEngineService ruleEngine)
             };
         }
 
-        if (payload.ExactDay.HasValue && payload.ExactDay.Value < 0)
+        var exactOverdueError = TryParseExactOverdueFilter(payload.ExactOverdue, payload.ExactDay, out _, out var normalizedExactOverdue);
+        if (exactOverdueError is not null)
+        {
+            return exactOverdueError;
+        }
+
+        if (false && payload.ExactDay.HasValue && payload.ExactDay.Value < 0)
         {
             return new ApiErrorDto
             {
@@ -68,7 +77,7 @@ public sealed partial class QueueService(RuleEngineService ruleEngine)
 
         var hasTimezone = timezoneOffsets.Count > 0;
         var hasRanges = (payload.OverdueRanges ?? []).Any(x => !string.IsNullOrWhiteSpace(x));
-        var hasExactDay = payload.ExactDay.HasValue;
+        var hasExactDay = !string.IsNullOrWhiteSpace(normalizedExactOverdue);
         if (!hasTimezone && !hasRanges && !hasExactDay)
         {
             return new ApiErrorDto
@@ -437,25 +446,21 @@ public sealed partial class QueueService(RuleEngineService ruleEngine)
             throw new KeyNotFoundException("Сессия очереди не найдена.");
         }
 
-        if (!string.Equals(session.Status, RunStatusPlanned, StringComparison.OrdinalIgnoreCase))
+        var canEditPlan =
+            string.Equals(session.Status, RunStatusPlanned, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(session.Status, RunStatusRunning, StringComparison.OrdinalIgnoreCase);
+        if (!canEditPlan)
         {
             throw new InvalidOperationException("Удаление из плана доступно только для сессии со статусом \"planned\".");
         }
 
-        var jobs = await db.RunJobs
-            .Where(x => x.RunSessionId == session.Id && requestedJobIds.Contains(x.Id))
-            .ToListAsync(cancellationToken);
-
-        var removable = jobs
-            .Where(x => string.Equals(x.Status, JobStatusQueued, StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(x.Status, JobStatusRetry, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        if (removable.Count > 0)
-        {
-            db.RunJobs.RemoveRange(removable);
-            await db.SaveChangesAsync(cancellationToken);
-        }
+        var removableStatuses = new[] { JobStatusQueued, JobStatusRetry, JobStatusStopped };
+        var removableQuery = db.RunJobs
+            .Where(x =>
+                x.RunSessionId == session.Id &&
+                requestedJobIds.Contains(x.Id) &&
+                removableStatuses.Contains(x.Status));
+        var removed = await removableQuery.ExecuteDeleteAsync(cancellationToken);
 
         var remaining = await db.RunJobs
             .AsNoTracking()
@@ -465,8 +470,8 @@ public sealed partial class QueueService(RuleEngineService ruleEngine)
         {
             RunSessionId = session.Id,
             Requested = requestedJobIds.Count,
-            Removed = removable.Count,
-            Skipped = requestedJobIds.Count - removable.Count,
+            Removed = removed,
+            Skipped = requestedJobIds.Count - removed,
             RemainingJobs = remaining,
             SessionStatus = session.Status
         };
@@ -821,11 +826,18 @@ public sealed partial class QueueService(RuleEngineService ruleEngine)
     private async Task<SelectionResult> SelectRowsAsync(AppDbContext db, QueueFilterRequestDto payload, CancellationToken cancellationToken)
     {
         var snapshot = await ResolveSnapshotAsync(db, payload.SnapshotId, cancellationToken);
+        var settings = await settingsStore.GetAsync(db, cancellationToken);
 
         var parseError = TryParseRanges(payload.OverdueRanges, out var overdueRanges);
         if (parseError is not null)
         {
             throw new InvalidOperationException(parseError.Message);
+        }
+
+        var exactOverdueError = TryParseExactOverdueFilter(payload.ExactOverdue, payload.ExactDay, out var exactOverdueRange, out var normalizedExactOverdue);
+        if (exactOverdueError is not null)
+        {
+            throw new InvalidOperationException(exactOverdueError.Message);
         }
 
         var timezoneOffsets = (payload.TimezoneOffsets ?? [])
@@ -846,13 +858,12 @@ public sealed partial class QueueService(RuleEngineService ruleEngine)
             filtered = filtered.Where(x => tzSet.Contains(x.TimezoneOffset));
         }
 
-        if (payload.ExactDay.HasValue)
+        if (exactOverdueRange.HasValue)
         {
-            var exactDay = payload.ExactDay.Value;
-            filtered = filtered.Where(x => x.DaysOverdue == exactDay);
+            var exactOverdue = exactOverdueRange.Value;
+            filtered = filtered.Where(x => x.DaysOverdue >= exactOverdue.From && x.DaysOverdue <= exactOverdue.To);
         }
-
-        if (overdueRanges.Count > 0)
+        else if (overdueRanges.Count > 0)
         {
             filtered = filtered.Where(x => overdueRanges.Any(r => x.DaysOverdue >= r.From && x.DaysOverdue <= r.To));
         }
@@ -873,17 +884,32 @@ public sealed partial class QueueService(RuleEngineService ruleEngine)
         var excludedByMissingPhone = matched.Count(x => string.IsNullOrWhiteSpace(x.Phone));
         var excludedByStopList = matched.Count(x => !string.IsNullOrWhiteSpace(x.Phone) && stopSet.Contains(NormalizePhone(x.Phone)));
 
-        var readyRows = matched
+        var readyCandidates = matched
             .Where(x => !string.IsNullOrWhiteSpace(x.Phone))
             .Where(x => !stopSet.Contains(NormalizePhone(x.Phone)))
+            .ToList();
+        var recentSmsSet = await GetRecentSentPhoneSetAsync(
+            db,
+            readyCandidates,
+            settings.RecentSmsCooldownDays,
+            cancellationToken);
+        var excludedByRecentSms = readyCandidates.Count(x => recentSmsSet.Contains(NormalizePhone(x.Phone)));
+        var readyRows = readyCandidates
+            .Where(x => !recentSmsSet.Contains(NormalizePhone(x.Phone)))
             .ToList();
 
         var appliedFilter = new QueueAppliedFilterDto
         {
             SnapshotId = snapshot.Id,
             TimezoneOffsets = timezoneOffsets,
-            OverdueRanges = overdueRanges.Select(r => $"{r.From}-{r.To}").ToList(),
-            ExactDay = payload.ExactDay
+            OverdueRanges = exactOverdueRange.HasValue
+                ? []
+                : overdueRanges.Select(r => $"{r.From}-{r.To}").ToList(),
+            ExactDay = exactOverdueRange is { From: var from, To: var to } && from == to
+                ? from
+                : null,
+            ExactOverdue = normalizedExactOverdue,
+            RecentSmsCooldownDays = settings.RecentSmsCooldownDays
         };
 
         var preview = new QueuePreviewDto
@@ -894,6 +920,7 @@ public sealed partial class QueueService(RuleEngineService ruleEngine)
             MatchedByFilter = matched.Count,
             ExcludedByStopList = excludedByStopList,
             ExcludedByMissingPhone = excludedByMissingPhone,
+            ExcludedByRecentSms = excludedByRecentSms,
             ReadyRows = readyRows.Count,
             CanBuild = readyRows.Count > 0,
             AppliedFilter = appliedFilter
@@ -1338,6 +1365,72 @@ public sealed partial class QueueService(RuleEngineService ruleEngine)
         return null;
     }
 
+    private static ApiErrorDto? TryParseExactOverdueFilter(
+        string? rawExactOverdue,
+        int? legacyExactDay,
+        out OverdueRange? range,
+        out string normalized)
+    {
+        range = null;
+        normalized = string.Empty;
+
+        var raw = (rawExactOverdue ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(raw))
+        {
+            var singleMatch = OverdueSingleDayRegex().Match(raw);
+            if (singleMatch.Success)
+            {
+                var day = int.Parse(singleMatch.Groups[1].Value, CultureInfo.InvariantCulture);
+                range = new OverdueRange(day, day);
+                normalized = day.ToString(CultureInfo.InvariantCulture);
+                return null;
+            }
+
+            var rangeMatch = OverdueRangeRegex().Match(raw);
+            if (!rangeMatch.Success)
+            {
+                return new ApiErrorDto
+                {
+                    Code = QueueExactOverdueLegacyErrorCode,
+                    Message = $"РќРµРєРѕСЂСЂРµРєС‚РЅРѕРµ Р·РЅР°С‡РµРЅРёРµ С‚РѕС‡РЅРѕР№ РїСЂРѕСЃСЂРѕС‡РєРё: '{raw}'. РћР¶РёРґР°РµС‚СЃСЏ С„РѕСЂРјР°С‚ 'N' РёР»Рё 'N-M'."
+                };
+            }
+
+            var from = int.Parse(rangeMatch.Groups[1].Value, CultureInfo.InvariantCulture);
+            var to = int.Parse(rangeMatch.Groups[2].Value, CultureInfo.InvariantCulture);
+            if (from < 0 || to < 0 || from > to)
+            {
+                return new ApiErrorDto
+                {
+                    Code = QueueExactOverdueLegacyErrorCode,
+                    Message = $"РќРµРєРѕСЂСЂРµРєС‚РЅРѕРµ Р·РЅР°С‡РµРЅРёРµ С‚РѕС‡РЅРѕР№ РїСЂРѕСЃСЂРѕС‡РєРё: '{raw}'."
+                };
+            }
+
+            range = new OverdueRange(from, to);
+            normalized = $"{from.ToString(CultureInfo.InvariantCulture)}-{to.ToString(CultureInfo.InvariantCulture)}";
+            return null;
+        }
+
+        if (!legacyExactDay.HasValue)
+        {
+            return null;
+        }
+
+        if (legacyExactDay.Value < 0)
+        {
+            return new ApiErrorDto
+            {
+                Code = QueueExactOverdueLegacyErrorCode,
+                Message = "РўРѕС‡РЅРѕРµ Р·РЅР°С‡РµРЅРёРµ РїСЂРѕСЃСЂРѕС‡РєРё РґРѕР»Р¶РЅРѕ Р±С‹С‚СЊ >= 0."
+            };
+        }
+
+        range = new OverdueRange(legacyExactDay.Value, legacyExactDay.Value);
+        normalized = legacyExactDay.Value.ToString(CultureInfo.InvariantCulture);
+        return null;
+    }
+
     private static async Task<ClientSnapshot> ResolveSnapshotAsync(AppDbContext db, long? snapshotId, CancellationToken cancellationToken)
     {
         ClientSnapshot? snapshot;
@@ -1668,6 +1761,54 @@ public sealed partial class QueueService(RuleEngineService ruleEngine)
                 StringComparer.Ordinal);
     }
 
+    private static async Task<HashSet<string>> GetRecentSentPhoneSetAsync(
+        AppDbContext db,
+        IReadOnlyList<ClientSnapshotRow> rows,
+        int cooldownDays,
+        CancellationToken cancellationToken)
+    {
+        if (cooldownDays <= 0 || rows.Count == 0)
+        {
+            return new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        var phones = rows
+            .Select(x => NormalizePhone(x.Phone))
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (phones.Count == 0)
+        {
+            return new HashSet<string>(StringComparer.Ordinal);
+        }
+
+        var thresholdUtc = GetRecentSmsThresholdUtc(cooldownDays);
+        var recentPhones = await db.Messages
+            .AsNoTracking()
+            .Where(x => x.Direction == MessageDirectionOut)
+            .Where(x => x.GatewayStatus == MessageGatewayStatusSent)
+            .Where(x => x.CreatedAtUtc >= thresholdUtc)
+            .Where(x => phones.Contains(x.ClientPhone))
+            .Select(x => x.ClientPhone)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        return recentPhones
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(NormalizePhone)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static DateTime GetRecentSmsThresholdUtc(int cooldownDays)
+    {
+        var localZone = TimeZoneInfo.Local;
+        var nowLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, localZone);
+        var thresholdDate = DateOnly.FromDateTime(nowLocal).AddDays(-(cooldownDays - 1));
+        var thresholdLocal = thresholdDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified);
+        return TimeZoneInfo.ConvertTimeToUtc(thresholdLocal, localZone);
+    }
+
     private static async Task UpsertBindingsFromScheduleAsync(
         AppDbContext db,
         IReadOnlyList<ClientSnapshotRow> rows,
@@ -1817,6 +1958,9 @@ public sealed partial class QueueService(RuleEngineService ruleEngine)
 
     [GeneratedRegex(@"^\s*(\d{1,3})\s*-\s*(\d{1,3})\s*$", RegexOptions.CultureInvariant)]
     private static partial Regex OverdueRangeRegex();
+
+    [GeneratedRegex(@"^\s*(\d{1,3})\s*$", RegexOptions.CultureInvariant)]
+    private static partial Regex OverdueSingleDayRegex();
 
     private sealed class SelectionResult
     {

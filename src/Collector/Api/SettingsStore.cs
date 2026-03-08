@@ -83,6 +83,7 @@ public sealed class SettingsStore
         settings.Login = (settings.Login ?? string.Empty).Trim();
         settings.Password = settings.Password ?? string.Empty;
         settings.Gap = settings.Gap <= 0 ? 8 : settings.Gap;
+        settings.RecentSmsCooldownDays = Math.Clamp(settings.RecentSmsCooldownDays, 0, 365);
         settings.WorkWindowStart = NormalizeTimeOrDefault(settings.WorkWindowStart, "08:00");
         settings.WorkWindowEnd = NormalizeTimeOrDefault(settings.WorkWindowEnd, "21:00");
 

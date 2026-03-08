@@ -1784,6 +1784,51 @@ public static class ApiHost
             }
         });
 
+        app.MapGet("/api/run/history", async (HttpContext ctx, AppDbContext db, RunService run, CancellationToken ct) =>
+        {
+            var limitRaw = ctx.Request.Query["limit"].ToString();
+            var offsetRaw = ctx.Request.Query["offset"].ToString();
+
+            var limit = 50;
+            if (!string.IsNullOrWhiteSpace(limitRaw))
+            {
+                if (!int.TryParse(limitRaw, out var parsedLimit))
+                {
+                    return ErrBadRequest(new ApiErrorDto
+                    {
+                        Code = "RUN_HISTORY_LIMIT_INVALID",
+                        Message = "Параметр limit должен быть числом."
+                    });
+                }
+
+                limit = Math.Clamp(parsedLimit, 1, 500);
+            }
+
+            var offset = 0;
+            if (!string.IsNullOrWhiteSpace(offsetRaw))
+            {
+                if (!int.TryParse(offsetRaw, out var parsedOffset) || parsedOffset < 0)
+                {
+                    return ErrBadRequest(new ApiErrorDto
+                    {
+                        Code = "RUN_HISTORY_OFFSET_INVALID",
+                        Message = "Параметр offset должен быть числом >= 0."
+                    });
+                }
+
+                offset = parsedOffset;
+            }
+
+            var data = await run.ListHistoryAsync(db, limit, offset, ct);
+            return Results.Ok(data);
+        });
+
+        app.MapDelete("/api/run/history", async (AppDbContext db, RunService run, CancellationToken ct) =>
+        {
+            var data = await run.ClearHistoryAsync(db, ct);
+            return Results.Ok(data);
+        });
+
         app.MapPost("/api/run/start", async (AppDbContext db, RunService run, RunStartRequestDto? payload, CancellationToken ct) =>
         {
             var validation = RunService.ValidateStartRequest(payload);
@@ -1938,6 +1983,8 @@ public static class ApiHost
         Console.WriteLine("  POST /api/queue/retry-errors");
         Console.WriteLine("  POST /api/queue/bulk/set-template");
         Console.WriteLine("  GET /api/run/status");
+        Console.WriteLine("  GET /api/run/history");
+        Console.WriteLine("  DELETE /api/run/history");
         Console.WriteLine("  POST /api/run/start");
         Console.WriteLine("  POST /api/run/stop");
         Console.WriteLine("  POST /api/app/shutdown");
@@ -1966,6 +2013,15 @@ public static class ApiHost
             {
                 Code = "CFG_INVALID_GAP",
                 Message = "Интервал между SMS должен быть больше 0."
+            };
+        }
+
+        if (payload.RecentSmsCooldownDays < 0 || payload.RecentSmsCooldownDays > 365)
+        {
+            return new ApiErrorDto
+            {
+                Code = "CFG_INVALID_RECENT_SMS_COOLDOWN_DAYS",
+                Message = "Интервал запрета повторной отправки должен быть в диапазоне от 0 до 365 дней."
             };
         }
 

@@ -6,6 +6,7 @@ public sealed class QueueFilterRequestDto
     public List<int> TimezoneOffsets { get; set; } = [];
     public List<string> OverdueRanges { get; set; } = [];
     public int? ExactDay { get; set; }
+    public string ExactOverdue { get; set; } = string.Empty;
 }
 
 public sealed class QueueAppliedFilterDto
@@ -14,6 +15,8 @@ public sealed class QueueAppliedFilterDto
     public List<int> TimezoneOffsets { get; set; } = [];
     public List<string> OverdueRanges { get; set; } = [];
     public int? ExactDay { get; set; }
+    public string ExactOverdue { get; set; } = string.Empty;
+    public int RecentSmsCooldownDays { get; set; }
 }
 
 public sealed class QueuePreviewDto
@@ -24,6 +27,7 @@ public sealed class QueuePreviewDto
     public int MatchedByFilter { get; set; }
     public int ExcludedByStopList { get; set; }
     public int ExcludedByMissingPhone { get; set; }
+    public int ExcludedByRecentSms { get; set; }
     public int ReadyRows { get; set; }
     public bool CanBuild { get; set; }
     public QueueAppliedFilterDto AppliedFilter { get; set; } = new();

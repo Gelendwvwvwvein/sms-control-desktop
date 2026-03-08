@@ -151,6 +151,8 @@ const state = {
   dialogForceScrollPhone: "",
   runRuntime: null,
   runForecast: null,
+  runHistory: [],
+  runHistoryTotal: 0,
   dialogPreview: {
     enabled: false,
     phone: "",
@@ -215,7 +217,7 @@ const state = {
   runFilters: {
     tz: new Set([-1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
     overdueRanges: new Set(["3-15", "16-29", "30-45", "46-59"]),
-    exactDay: null
+    exactOverdue: ""
   },
   clientsViewFilters: {
     search: "",
@@ -675,6 +677,23 @@ function getGapMinutes() {
   return Math.round(value);
 }
 
+function getRecentSmsCooldownDays() {
+  const value = Number($("cfgRecentSmsCooldownDays")?.value);
+  if (!Number.isFinite(value) || value < 0) return 0;
+  return Math.min(365, Math.round(value));
+}
+
+function formatRunSessionStatus(status) {
+  const normalized = String(status || "").trim().toLowerCase();
+  const map = {
+    planned: "Готово",
+    running: "Выполняется",
+    stopped: "Остановлено",
+    completed: "Завершено"
+  };
+  return map[normalized] || (normalized || "—");
+}
+
 function normalizePhone(phone) {
   let digits = (phone || "").replace(/\D/g, "");
   if (digits.length === 10) {
@@ -1087,6 +1106,98 @@ function formatTemplateRuleTypeRule(type) {
   return `Диапазон: ${from}-${to}`;
 }
 
+function getAppliedTemplateRuleTypes() {
+  const baselineTypes = Array.isArray(state.settingsBaseline?.templateRuleTypes)
+    ? state.settingsBaseline.templateRuleTypes
+    : state.templateRuleTypes;
+  return normalizeTemplateRuleTypes(baselineTypes);
+}
+
+function getConfiguredRunOverdueOptions() {
+  const byValue = new Map();
+  getAppliedTemplateRuleTypes().forEach((type, index) => {
+    if (type?.autoAssign === false) return;
+    const mode = normalizeTemplateOverdueMode(type?.overdueMode);
+    if (mode !== "range") return;
+
+    const from = Math.max(0, parseTemplateOptionalInt(type?.overdueFromDays) ?? 0);
+    const to = Math.max(from, parseTemplateOptionalInt(type?.overdueToDays) ?? from);
+    const value = `${from}-${to}`;
+    const sortOrder = Number.isFinite(Number(type?.sortOrder))
+      ? Number(type.sortOrder)
+      : ((index + 1) * 10);
+    const existing = byValue.get(value);
+    if (existing && existing.sortOrder <= sortOrder) {
+      return;
+    }
+
+    byValue.set(value, {
+      value,
+      from,
+      to,
+      sortOrder,
+      label: `РџСЂРѕСЃСЂРѕС‡РєР° ${value}`
+    });
+  });
+
+  return Array.from(byValue.values()).sort((a, b) => {
+    if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+    if (a.from !== b.from) return a.from - b.from;
+    return a.to - b.to;
+  });
+}
+
+function parseRunExactOverdue(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+
+  const singleMatch = raw.match(/^(\d{1,3})$/);
+  if (singleMatch) {
+    const day = Number(singleMatch[1]);
+    return Number.isFinite(day) ? { raw, normalized: String(day), from: day, to: day } : null;
+  }
+
+  const rangeMatch = raw.match(/^(\d{1,3})\s*-\s*(\d{1,3})$/);
+  if (!rangeMatch) return null;
+
+  const from = Number(rangeMatch[1]);
+  const to = Number(rangeMatch[2]);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || from < 0 || to < from) {
+    return null;
+  }
+
+  return {
+    raw,
+    normalized: `${from}-${to}`,
+    from,
+    to
+  };
+}
+
+function getNormalizedRunExactOverdue() {
+  return parseRunExactOverdue(state.runFilters.exactOverdue)?.normalized || "";
+}
+
+function renderRunOverdueFilterOptions(options = {}) {
+  const { preserveSelection = true } = options;
+  const container = $("runOverdueFilterBlock");
+  if (!container) return;
+
+  const overdueOptions = getConfiguredRunOverdueOptions();
+  const availableValues = new Set(overdueOptions.map((item) => item.value));
+  const nextSelection = preserveSelection
+    ? new Set(Array.from(state.runFilters.overdueRanges).filter((value) => availableValues.has(value)))
+    : new Set();
+  if (nextSelection.size === 0) {
+    overdueOptions.forEach((item) => nextSelection.add(item.value));
+  }
+  state.runFilters.overdueRanges = nextSelection;
+
+  container.innerHTML = overdueOptions.map((item) => `
+    <label><input type="checkbox" class="run-overdue" value="${item.value}" ${state.runFilters.overdueRanges.has(item.value) ? "checked" : ""}> ${item.label}</label>
+  `).join("");
+}
+
 function templateTypeRule(kind, options = {}) {
   const type = getTemplateType(kind, {
     allowMissing: true,
@@ -1232,7 +1343,7 @@ function hasAnyRunFilterSelected() {
   return (
     state.runFilters.tz.size > 0 ||
     state.runFilters.overdueRanges.size > 0 ||
-    state.runFilters.exactDay !== null
+    getNormalizedRunExactOverdue() !== ""
   );
 }
 
@@ -1248,11 +1359,13 @@ function hasExpectedSnapshotModeLoaded() {
 }
 
 function buildQueueFilterPayload() {
+  const exactOverdue = getNormalizedRunExactOverdue();
   return {
     snapshotId: state.clientsDb.snapshotId || null,
     timezoneOffsets: Array.from(state.runFilters.tz).sort((a, b) => a - b),
-    overdueRanges: Array.from(state.runFilters.overdueRanges),
-    exactDay: state.runFilters.exactDay
+    overdueRanges: exactOverdue ? [] : Array.from(state.runFilters.overdueRanges),
+    exactDay: null,
+    exactOverdue
   };
 }
 
@@ -1326,6 +1439,26 @@ function mapQueueJobDtoToUi(job) {
     previewErrorDetail: String(job.previewErrorDetail || ""),
     hasMessageOverride: Boolean(job.hasMessageOverride),
     messageOverrideText: String(job.messageOverrideText || "")
+  };
+}
+
+function mapRunHistoryDtoToUi(item) {
+  return {
+    id: Number(item?.id || 0),
+    mode: String(item?.mode || "").trim(),
+    status: String(item?.status || "").trim().toLowerCase(),
+    createdAtUtc: String(item?.createdAtUtc || ""),
+    startedAtUtc: String(item?.startedAtUtc || ""),
+    finishedAtUtc: String(item?.finishedAtUtc || ""),
+    snapshotId: item?.snapshotId == null ? null : Number(item.snapshotId),
+    notes: String(item?.notes || "").trim(),
+    totalJobs: Number(item?.totalJobs || 0),
+    queuedJobs: Number(item?.queuedJobs || 0),
+    runningJobs: Number(item?.runningJobs || 0),
+    retryJobs: Number(item?.retryJobs || 0),
+    stoppedJobs: Number(item?.stoppedJobs || 0),
+    sentJobs: Number(item?.sentJobs || 0),
+    failedJobs: Number(item?.failedJobs || 0)
   };
 }
 
@@ -1413,6 +1546,7 @@ function mapDialogSummaryDtoToUi(item) {
   return {
     id: item.dialogId || phone,
     phone,
+    contractNumber: String(item.contractNumber || "").trim(),
     fio: item.fio || phone || "Клиент",
     updatedAt: Number.isFinite(activityMs) ? new Date(activityMs).toISOString() : new Date(mskNowUtcMs()).toISOString(),
     totalMessages: Number(item.totalMessages ?? 0),
@@ -1498,22 +1632,26 @@ function statusCell(status) {
 }
 
 function shouldPassRunFilter(job) {
+  const exactOverdue = parseRunExactOverdue(state.runFilters.exactOverdue);
   const hasAnyFilter =
     state.runFilters.tz.size > 0 ||
     state.runFilters.overdueRanges.size > 0 ||
-    state.runFilters.exactDay !== null;
+    Boolean(exactOverdue);
   if (!hasAnyFilter) return false;
 
   const tzFilterActive = state.runFilters.tz.size > 0;
   if (tzFilterActive && !state.runFilters.tz.has(job.tzOffset)) return false;
 
-  if (state.runFilters.exactDay !== null) {
-    return job.daysOverdue === state.runFilters.exactDay;
+  if (exactOverdue) {
+    return job.daysOverdue >= exactOverdue.from && job.daysOverdue <= exactOverdue.to;
   }
 
   const overdueFilterActive = state.runFilters.overdueRanges.size > 0;
   if (!overdueFilterActive) return true;
-  return state.runFilters.overdueRanges.has(overdueRange(job.daysOverdue));
+  return Array.from(state.runFilters.overdueRanges).some((value) => {
+    const range = parseRunExactOverdue(value);
+    return range && job.daysOverdue >= range.from && job.daysOverdue <= range.to;
+  });
 }
 
 function findDialogByPhone(phone) {
@@ -1851,6 +1989,7 @@ async function rebuildPlannedQueue(showToast = true) {
     state.runForecast = result?.forecast || null;
     await refreshQueueFromBackend({ silent: true, runSessionId: state.queueSessionId });
     await refreshRunStatusFromBackend({ silent: true, runSessionId: state.queueSessionId });
+    await refreshRunHistoryFromBackend({ silent: true });
     renderClientsDb();
     renderRunForecast();
     renderDbSyncState();
@@ -2127,9 +2266,7 @@ function collectRunFiltersFromUI() {
   state.runFilters.overdueRanges = new Set(
     Array.from(document.querySelectorAll(".run-overdue:checked")).map((n) => n.value)
   );
-  const rawDay = $("runExactDay").value.trim();
-  const exactDayValue = rawDay ? Number(rawDay) : null;
-  state.runFilters.exactDay = Number.isFinite(exactDayValue) ? exactDayValue : null;
+  state.runFilters.exactOverdue = $("runExactDay").value.trim();
 }
 
 function renderDbSyncState() {
@@ -2197,10 +2334,12 @@ function renderDbSyncState() {
 }
 
 function renderRunFilterSummary() {
+  const exactOverdue = parseRunExactOverdue(state.runFilters.exactOverdue);
+  const recentSmsCooldownDays = getRecentSmsCooldownDays();
   const hasAnyFilter =
     state.runFilters.tz.size > 0 ||
     state.runFilters.overdueRanges.size > 0 ||
-    state.runFilters.exactDay !== null;
+    Boolean(exactOverdue);
   if (!hasAnyFilter) {
     setNotice("runFilterSummary", "Фильтр не выбран. Выберите хотя бы один часовой пояс или просрочку.", "warning");
     return;
@@ -2213,10 +2352,13 @@ function renderRunFilterSummary() {
   const ranges = Array.from(state.runFilters.overdueRanges).join(", ");
   const tzText = state.runFilters.tz.size === 0 ? "все" : tz;
   const rangesText = state.runFilters.overdueRanges.size === 0 ? "все" : ranges;
-  const exact = state.runFilters.exactDay;
-  const text = exact !== null
-    ? `Фильтр: пояса [${tzText}], точная просрочка ${exact} дней`
-    : `Фильтр: пояса [${tzText}], диапазоны просрочки [${rangesText}]`;
+  const exact = exactOverdue?.normalized || "";
+  const cooldownText = recentSmsCooldownDays > 0
+    ? `, повторно не писать ${recentSmsCooldownDays} дн. после успешной SMS`
+    : "";
+  const text = exact
+    ? `Фильтр: пояса [${tzText}], точная просрочка ${exact} дней${cooldownText}`
+    : `Фильтр: пояса [${tzText}], диапазоны просрочки [${rangesText}]${cooldownText}`;
   setNotice("runFilterSummary", text, "info");
 }
 
@@ -2328,6 +2470,8 @@ function renderRunForecast() {
   const onlineChannelsCount = Math.max(0, Number(forecast.onlineChannelsCount || 0));
   const channelsUsed = Math.max(1, Number(forecast.channelsUsed || 1));
   const finishAtUtc = forecast.estimatedFinishAtUtc || "";
+  const excludedByRecentSms = Math.max(0, Number(preview.excludedByRecentSms || 0));
+  const recentSmsCooldownDays = Math.max(0, Number(preview.appliedFilter?.recentSmsCooldownDays || 0));
 
   $("planClients").textContent = String(jobsCount);
   $("planGap").textContent = String(gapMinutes);
@@ -2337,7 +2481,10 @@ function renderRunForecast() {
   $("planFinish").textContent = jobsCount > 0 ? toMskDateTimeOrEmpty(finishAtUtc) : "--:--";
 
   if (jobsCount === 0) {
-    setNotice("planHint", "По текущему фильтру нет клиентов для плановой очереди. Измените фильтр.", "warning");
+    const recentSmsHint = excludedByRecentSms > 0 && recentSmsCooldownDays > 0
+      ? ` Исключено по недавней отправке SMS: ${excludedByRecentSms} за последние ${recentSmsCooldownDays} дн.`
+      : "";
+    setNotice("planHint", `По текущему фильтру нет клиентов для плановой очереди.${recentSmsHint}`, "warning");
     return;
   }
 
@@ -2352,9 +2499,12 @@ function renderRunForecast() {
   }
 
   const workWindowLabel = getWorkWindowRange().label;
+  const recentSmsHint = excludedByRecentSms > 0 && recentSmsCooldownDays > 0
+    ? ` Исключено по недавней отправке SMS: ${excludedByRecentSms} за последние ${recentSmsCooldownDays} дн.`
+    : "";
   setNotice(
     "planHint",
-    `Онлайн-каналов: ${onlineChannelsCount}, в расчете использовано: ${channelsUsed}. Рабочее окно ${workWindowLabel} учитывается для всех исходящих сообщений по локальному времени клиента.`,
+    `Онлайн-каналов: ${onlineChannelsCount}, в расчете использовано: ${channelsUsed}. Рабочее окно ${workWindowLabel} учитывается для всех исходящих сообщений по локальному времени клиента.${recentSmsHint}`,
     "info"
   );
 }
@@ -2386,6 +2536,38 @@ function addRunLog(line, atUtcMs = null) {
   const stamp = atUtcMs === null ? nowHHMM() : formatMskHHMM(atUtcMs);
   log.textContent += `[${stamp}] ${line}\n`;
   log.scrollTop = log.scrollHeight;
+}
+
+function renderRunHistory() {
+  const body = $("runHistoryBody");
+  if (!body) return;
+
+  const clearBtn = $("runHistoryClear");
+  const refreshBtn = $("runHistoryRefresh");
+  if (clearBtn) clearBtn.disabled = state.runHistory.length === 0;
+  if (refreshBtn) refreshBtn.disabled = false;
+
+  if (state.runHistory.length === 0) {
+    body.innerHTML = '<tr><td colspan="7"><p class="muted-note">История запусков пока пуста.</p></td></tr>';
+    return;
+  }
+
+  body.innerHTML = state.runHistory.map((item) => {
+    const summary = escapeHtml(`${item.sentJobs}/${item.totalJobs} отправлено, ошибок: ${item.failedJobs}`);
+    const notes = escapeHtml(item.notes || "—");
+    const mode = escapeHtml(item.mode || "run");
+    return `
+      <tr>
+        <td>#${item.id} <small class="muted-note">${mode}</small></td>
+        <td>${toMskDateTimeOrEmpty(item.createdAtUtc) || "—"}</td>
+        <td>${toMskDateTimeOrEmpty(item.startedAtUtc) || "—"}</td>
+        <td>${toMskDateTimeOrEmpty(item.finishedAtUtc) || "—"}</td>
+        <td><span class="pill ${escapeHtml(item.status || "planned")}">${escapeHtml(formatRunSessionStatus(item.status))}</span></td>
+        <td>${summary}</td>
+        <td>${notes}</td>
+      </tr>
+    `;
+  }).join("");
 }
 
 function renderAlerts() {
@@ -3693,6 +3875,7 @@ function readSettingsDraftFromUI() {
     login: $("cfgLogin").value.trim(),
     password: $("cfgPassword").value,
     gap: $("cfgGap").value.trim(),
+    recentSmsCooldownDays: $("cfgRecentSmsCooldownDays").value.trim(),
     allowLiveDispatch: $("cfgAllowLiveDispatch")?.checked !== false,
     workWindowStart: $("cfgWorkWindowStart").value.trim() || DEFAULT_WORK_WINDOW_START,
     workWindowEnd: $("cfgWorkWindowEnd").value.trim() || DEFAULT_WORK_WINDOW_END,
@@ -3714,6 +3897,9 @@ function applySettingsDraftToUI(settings) {
   }
   if (Object.prototype.hasOwnProperty.call(settings, "gap")) {
     $("cfgGap").value = settings.gap ?? "";
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, "recentSmsCooldownDays")) {
+    $("cfgRecentSmsCooldownDays").value = settings.recentSmsCooldownDays ?? 0;
   }
   if (Object.prototype.hasOwnProperty.call(settings, "allowLiveDispatch")) {
     $("cfgAllowLiveDispatch").checked = settings.allowLiveDispatch !== false;
@@ -3994,13 +4180,28 @@ function renderQueue() {
       </td>
     </tr>
   `).join("");
+  $("queueBody").querySelectorAll("[data-action='queue-remove-plan']").forEach((btn) => {
+    const jobId = Number(btn.dataset.qId);
+    const job = state.queue.find((item) => Number(item.id) === jobId);
+    btn.disabled = !job || !["queued", "retry", "stopped"].includes(job.status);
+  });
   renderQueueBulkUi(rows);
   renderQueueRetryActionState();
 }
 
 function renderDialogs() {
   const list = $("dialogList");
-  const sortedDialogs = [...state.dialogs].sort((a, b) => dialogLastActivityUtcMs(b) - dialogLastActivityUtcMs(a));
+  const search = (($("dialogsSearch")?.value) || "").trim().toLowerCase();
+  const searchPhone = normalizePhone(search);
+  const sortedDialogs = [...state.dialogs]
+    .filter((dialog) => {
+      if (!search) return true;
+      const inFio = String(dialog.fio || "").toLowerCase().includes(search);
+      const inPhone = searchPhone ? normalizePhone(dialog.phone).includes(searchPhone) : false;
+      const inContract = String(dialog.contractNumber || "").toLowerCase().includes(search);
+      return inFio || inPhone || inContract;
+    })
+    .sort((a, b) => dialogLastActivityUtcMs(b) - dialogLastActivityUtcMs(a));
   if (sortedDialogs.length === 0) {
     state.selectedDialogId = null;
     list.innerHTML = '<p class="muted-note dialog-empty">Диалогов нет</p>';
@@ -4020,6 +4221,7 @@ function renderDialogs() {
         <strong>${d.fio}</strong>
       </div>
       <p>${d.phone}</p>
+      <small class="contact-meta">Договор: ${d.contractNumber || "-"}</small>
       <small class="contact-meta">Девайс: ${dialogChannelLabel(d)}</small>
       <small class="contact-meta">Активность: ${formatMskDateTime(dialogLastActivityUtcMs(d))}</small>
       ${isPhoneInStopList(d.phone) ? "<small class=\"contact-flag\">в стоп-листе</small>" : ""}
@@ -4742,6 +4944,9 @@ async function refreshRunStatusFromBackend(options = {}) {
       : "/api/run/status";
     const data = await fetchApiJson(path);
     applyRunStatusToUi(data);
+    if (activeTabId() === "run") {
+      void refreshRunHistoryFromBackend({ silent: true });
+    }
     renderDbSyncState();
     return data;
   } catch (error) {
@@ -4749,6 +4954,48 @@ async function refreshRunStatusFromBackend(options = {}) {
       toast(`Не удалось получить статус запуска: ${error?.message || "ошибка backend"}`);
     }
     return null;
+  }
+}
+
+async function refreshRunHistoryFromBackend(options = {}) {
+  const { silent = false } = options;
+  try {
+    const data = await fetchApiJson("/api/run/history?limit=100&offset=0");
+    state.runHistoryTotal = Number(data?.total || 0);
+    state.runHistory = Array.isArray(data?.items) ? data.items.map(mapRunHistoryDtoToUi) : [];
+    renderRunHistory();
+    return true;
+  } catch (error) {
+    if (!silent) {
+      toast(`Не удалось загрузить историю запусков: ${error?.message || "ошибка backend"}`);
+    }
+    return false;
+  }
+}
+
+async function clearRunHistory() {
+  if (state.runHistory.length === 0) {
+    toast("История запусков уже пуста");
+    return;
+  }
+
+  const confirmed = window.confirm("Очистить историю запусков? Активная сессия и текущий план удалены не будут.");
+  if (!confirmed) return;
+
+  try {
+    const result = await fetchApiJson("/api/run/history", { method: "DELETE" });
+    await refreshRunHistoryFromBackend({ silent: true });
+    await refreshRunStatusFromBackend({ silent: true });
+    await refreshQueueFromBackend({ silent: true, runSessionId: state.queueSessionId || null });
+    const deletedSessions = Number(result?.deletedSessions || 0);
+    const deletedEvents = Number(result?.deletedEvents || 0);
+    toast(
+      deletedSessions > 0
+        ? `История запусков очищена: удалено сессий ${deletedSessions}, событий ${deletedEvents}`
+        : "Удалять нечего: защищены только активная или текущая плановая сессия"
+    );
+  } catch (error) {
+    toast(`Не удалось очистить историю запусков: ${error?.message || "ошибка backend"}`);
   }
 }
 
@@ -5094,6 +5341,7 @@ async function startRun() {
       await refreshRunStatusFromBackend({ silent: true });
     }
     await refreshQueueFromBackend({ silent: true, runSessionId: state.queueSessionId || null });
+    await refreshRunHistoryFromBackend({ silent: true });
     await refreshRunForecastFromBackend({ silent: true });
     startRunPolling();
     renderRunFilterSummary();
@@ -5121,6 +5369,7 @@ async function stopRun(reason = "Остановка по запросу опер
     } else {
       await refreshRunStatusFromBackend({ silent: true });
     }
+    await refreshRunHistoryFromBackend({ silent: true });
     await refreshQueueFromBackend({ silent: true, runSessionId: state.queueSessionId || null });
     await refreshRunForecastFromBackend({ silent: true });
     addRunLog(result?.message || reason);
@@ -5196,6 +5445,7 @@ async function saveSettings(options = {}) {
     login: draft.login,
     password: draft.password,
     gap: Math.max(1, Math.round(Number(draft.gap) || 8)),
+    recentSmsCooldownDays: Math.max(0, Math.min(365, Math.round(Number(draft.recentSmsCooldownDays) || 0))),
     allowLiveDispatch: draft.allowLiveDispatch !== false,
     workWindowStart: draft.workWindowStart,
     workWindowEnd: draft.workWindowEnd,
@@ -5229,6 +5479,7 @@ async function saveSettings(options = {}) {
       login: saved.login,
       password: saved.password,
       gap: saved.gap,
+      recentSmsCooldownDays: saved.recentSmsCooldownDays,
       allowLiveDispatch: saved.allowLiveDispatch,
       workWindowStart: saved.workWindowStart,
       workWindowEnd: saved.workWindowEnd,
@@ -5243,6 +5494,9 @@ async function saveSettings(options = {}) {
       toast("Настройки сохранены, но не удалось обновить список шаблонов. Обновите вкладку «Шаблоны».");
     }
     setSettingsBaselineFromUI();
+    renderRunOverdueFilterOptions({ preserveSelection: true });
+    collectRunFiltersFromUI();
+    renderRunFilterSummary();
     await refreshRunStatusFromBackend({ silent: true });
     void refreshRunForecastFromBackend({ silent: true });
     if (!silent) {
@@ -5265,6 +5519,7 @@ async function loadSettings() {
       login: data.login,
       password: data.password,
       gap: data.gap,
+      recentSmsCooldownDays: data.recentSmsCooldownDays,
       allowLiveDispatch: data.allowLiveDispatch,
       workWindowStart: data.workWindowStart,
       workWindowEnd: data.workWindowEnd,
@@ -5280,6 +5535,9 @@ async function loadSettings() {
   }
 
   setSettingsBaselineFromUI();
+  renderRunOverdueFilterOptions({ preserveSelection: true });
+  collectRunFiltersFromUI();
+  renderRunFilterSummary();
   renderTemplateRuleTypeSettings();
   renderManualPresetManager();
 }
@@ -5544,15 +5802,12 @@ async function addPhoneToStopList(phone, reason, source, options = {}) {
     } else {
       await refreshStopListFromBackend({ silent: true });
     }
-    if (!state.runRuntime) {
-      const removedIds = state.queue
-        .filter((q) => normalizePhone(q.phone) === normalized)
-        .map((q) => q.clientId);
-      removedIds.forEach((id) => state.excludedClientIds.add(id));
-      state.queue = state.queue.filter((q) => normalizePhone(q.phone) !== normalized);
-    }
+    const queueRemoval = await removePendingQueueJobsByPhones([normalized], { silent: true });
     if (!deferRender) {
       refreshAfterStopListChange();
+    }
+    if (!silent && Number(queueRemoval?.removed ?? 0) > 0) {
+      addRunLog(`РР· РѕС‡РµСЂРµРґРё СѓР±СЂР°РЅРѕ pending-Р·Р°РґР°С‡: ${Number(queueRemoval?.removed ?? 0)} (stop-list ${normalized}).`);
     }
     return true;
   } catch (error) {
@@ -5681,15 +5936,9 @@ async function bulkAddSelectedClientsToStopList() {
       })
     });
     const added = Number(result?.added ?? 0);
-    if (!state.runRuntime && added > 0) {
-      phones.forEach((normPhone) => {
-        const removedIds = state.queue
-          .filter((q) => normalizePhone(q.phone) === normPhone)
-          .map((q) => q.clientId);
-        removedIds.forEach((id) => state.excludedClientIds.add(id));
-      });
-      state.queue = state.queue.filter((q) => !phones.includes(normalizePhone(q.phone)));
-    }
+    const queueRemoval = added > 0
+      ? await removePendingQueueJobsByPhones(phones, { silent: true })
+      : null;
     await refreshStopListFromBackend({ silent: true });
     refreshAfterStopListChange();
     state.selectedClients.clear();
@@ -5781,15 +6030,9 @@ async function bulkAddSelectedQueueToStopList() {
       })
     });
     const added = Number(result?.added ?? 0);
-    if (!state.runRuntime && added > 0) {
-      phones.forEach((normPhone) => {
-        const removedIds = state.queue
-          .filter((q) => normalizePhone(q.phone) === normPhone)
-          .map((q) => q.clientId);
-        removedIds.forEach((id) => state.excludedClientIds.add(id));
-      });
-      state.queue = state.queue.filter((q) => !phones.includes(normalizePhone(q.phone)));
-    }
+    const queueRemoval = added > 0
+      ? await removePendingQueueJobsByPhones(phones, { silent: true })
+      : null;
     await refreshStopListFromBackend({ silent: true });
     refreshAfterStopListChange();
     state.selectedQueue.clear();
@@ -5914,6 +6157,30 @@ async function removeQueueJobsFromPlan(jobIds, options = {}) {
     }
     return null;
   }
+}
+
+function getRemovableQueueJobIdsByPhones(phones) {
+  const phoneSet = new Set(
+    (phones || [])
+      .map((phone) => normalizePhone(phone))
+      .filter(Boolean)
+  );
+  if (phoneSet.size === 0) return [];
+
+  return state.queue
+    .filter((job) =>
+      phoneSet.has(normalizePhone(job.phone)) &&
+      ["queued", "retry", "stopped"].includes(job.status))
+    .map((job) => job.id);
+}
+
+async function removePendingQueueJobsByPhones(phones, options = {}) {
+  const jobIds = getRemovableQueueJobIdsByPhones(phones);
+  if (jobIds.length === 0) {
+    return { removed: 0, skipped: 0, remainingJobs: state.queue.length, runSessionId: state.queueSessionId || 0 };
+  }
+
+  return removeQueueJobsFromPlan(jobIds, options);
 }
 
 function buildDebtToastText(debt) {
@@ -6043,21 +6310,17 @@ async function bulkFetchDebtForSelectedQueue() {
 }
 
 async function bulkRemoveSelectedFromPlan() {
-  if (state.runRuntime) {
-    toast("Во время запуска нельзя менять план вручную");
-    return;
-  }
   const selected = getSelectedQueueRows();
   if (selected.length === 0) {
     toast("Сначала выберите клиентов в очереди");
     return;
   }
   const removableIds = selected
-    .filter((q) => ["queued", "retry"].includes(q.status))
+    .filter((q) => ["queued", "retry", "stopped"].includes(q.status))
     .map((q) => q.id);
   const removableJobIds = new Set(
     selected
-      .filter((q) => ["queued", "retry"].includes(q.status))
+      .filter((q) => ["queued", "retry", "stopped"].includes(q.status))
       .map((q) => q.id)
   );
   if (removableIds.length === 0) {
@@ -6301,10 +6564,6 @@ function bindEvents() {
       toast("Клиент перенесен в стоп-лист");
     },
     "queue-remove-plan": async (btn) => {
-      if (state.runRuntime) {
-        toast("Во время запуска нельзя менять план вручную");
-        return;
-      }
       const id = Number(btn.dataset.qId);
       if (!id) return;
       const result = await removeQueueJobsFromPlan([id], { silent: true });
@@ -6410,6 +6669,16 @@ function bindEvents() {
   $("runSyncDb").addEventListener("click", () => {
     void syncClientsDatabase();
   });
+  if ($("runHistoryRefresh")) {
+    $("runHistoryRefresh").addEventListener("click", () => {
+      void refreshRunHistoryFromBackend();
+    });
+  }
+  if ($("runHistoryClear")) {
+    $("runHistoryClear").addEventListener("click", () => {
+      void clearRunHistory();
+    });
+  }
   $("globalStart").addEventListener("click", () => {
     void startRun();
   });
@@ -6507,11 +6776,16 @@ function bindEvents() {
     refreshRunFiltersUI();
   });
   $("runFilterReset").addEventListener("click", resetRunFilters);
-  document.querySelectorAll(".run-tz, .run-overdue").forEach((el) => {
+  document.querySelectorAll(".run-tz").forEach((el) => {
     el.addEventListener("change", () => {
       refreshRunFiltersUI();
     });
   });
+  if ($("runOverdueFilterBlock")) {
+    $("runOverdueFilterBlock").addEventListener("change", () => {
+      refreshRunFiltersUI();
+    });
+  }
   $("runExactDay").addEventListener("input", () => {
     refreshRunFiltersUI();
   });
@@ -6562,6 +6836,13 @@ function bindEvents() {
   });
   $("cfgGap").addEventListener("input", () => {
     void refreshRunForecastFromBackend({ silent: true });
+    renderRunFilterSummary();
+  });
+  if ($("cfgRecentSmsCooldownDays")) {
+    $("cfgRecentSmsCooldownDays").addEventListener("input", () => {
+      void refreshRunForecastFromBackend({ silent: true });
+      renderRunFilterSummary();
+    });
   });
   $("cfgWorkWindowStart").addEventListener("input", () => {
     void refreshRunForecastFromBackend({ silent: true });
@@ -6807,6 +7088,12 @@ function bindEvents() {
   if ($("stopSearch")) {
     $("stopSearch").addEventListener("input", renderStopList);
   }
+  if ($("dialogsSearch")) {
+    $("dialogsSearch").addEventListener("input", () => {
+      renderDialogs();
+      renderChat();
+    });
+  }
   $("dialogPruneDays").addEventListener("input", () => {
     const value = Number($("dialogPruneDays").value);
     if (Number.isFinite(value) && value >= 1) {
@@ -6986,6 +7273,7 @@ async function init() {
     refreshStopListFromBackend({ silent: true }),
     refreshClientsSnapshotFromBackend({ silent: true }),
     refreshRunStatusFromBackend({ silent: true }),
+    refreshRunHistoryFromBackend({ silent: true }),
     refreshQueueFromBackend({ silent: true }),
     refreshDialogsFromBackend({ silent: true }),
     refreshAlertsFromBackend({ silent: true }),
@@ -7005,6 +7293,7 @@ async function init() {
   syncChannelAlertFlags();
   renderAlerts();
   renderChannels();
+  renderRunHistory();
   renderTemplateRuleTypeSettings();
   renderTemplates();
   renderTemplateEditorState();

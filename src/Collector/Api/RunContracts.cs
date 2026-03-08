@@ -52,3 +52,16 @@ public sealed class RunCommandResultDto
     public DateTime ChangedAtUtc { get; set; }
     public RunStatusDto Status { get; set; } = new();
 }
+
+public sealed class RunHistoryListDto
+{
+    public int Total { get; set; }
+    public List<RunSessionSummaryDto> Items { get; set; } = [];
+}
+
+public sealed class RunHistoryClearResultDto
+{
+    public int DeletedSessions { get; set; }
+    public int DeletedEvents { get; set; }
+    public int ProtectedSessions { get; set; }
+}

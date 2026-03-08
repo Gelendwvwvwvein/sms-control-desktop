@@ -303,6 +303,73 @@ public sealed class RunService(SettingsStore settingsStore)
         return null;
     }
 
+    public async Task<RunHistoryListDto> ListHistoryAsync(
+        AppDbContext db,
+        int limit,
+        int offset,
+        CancellationToken cancellationToken)
+    {
+        var protectedIds = await GetProtectedHistorySessionIdsAsync(db, cancellationToken);
+        var query = db.RunSessions
+            .AsNoTracking()
+            .Where(x => !protectedIds.Contains(x.Id));
+
+        var total = await query.CountAsync(cancellationToken);
+        var sessions = await query
+            .OrderByDescending(x => x.Id)
+            .Skip(offset)
+            .Take(limit)
+            .ToListAsync(cancellationToken);
+
+        var items = new List<RunSessionSummaryDto>(sessions.Count);
+        foreach (var session in sessions)
+        {
+            items.Add(await BuildSessionSummaryAsync(db, session, cancellationToken));
+        }
+
+        return new RunHistoryListDto
+        {
+            Total = total,
+            Items = items
+        };
+    }
+
+    public async Task<RunHistoryClearResultDto> ClearHistoryAsync(
+        AppDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var protectedIds = await GetProtectedHistorySessionIdsAsync(db, cancellationToken);
+        var deletableSessionIds = await db.RunSessions
+            .AsNoTracking()
+            .Where(x => !protectedIds.Contains(x.Id))
+            .Select(x => x.Id)
+            .ToListAsync(cancellationToken);
+
+        if (deletableSessionIds.Count == 0)
+        {
+            return new RunHistoryClearResultDto
+            {
+                DeletedSessions = 0,
+                DeletedEvents = 0,
+                ProtectedSessions = protectedIds.Count
+            };
+        }
+
+        var deletedEvents = await db.Events
+            .Where(x => x.RunSessionId.HasValue && deletableSessionIds.Contains(x.RunSessionId.Value))
+            .ExecuteDeleteAsync(cancellationToken);
+        var deletedSessions = await db.RunSessions
+            .Where(x => deletableSessionIds.Contains(x.Id))
+            .ExecuteDeleteAsync(cancellationToken);
+
+        return new RunHistoryClearResultDto
+        {
+            DeletedSessions = deletedSessions,
+            DeletedEvents = deletedEvents,
+            ProtectedSessions = protectedIds.Count
+        };
+    }
+
     private static async Task<RunSessionSummaryDto> BuildSessionSummaryAsync(
         AppDbContext db,
         RunSessionRecord session,
@@ -336,6 +403,37 @@ public sealed class RunService(SettingsStore settingsStore)
             SentJobs = ReadCount(byStatus, JobStatusSent),
             FailedJobs = ReadCount(byStatus, JobStatusFailed)
         };
+    }
+
+    private static async Task<HashSet<long>> GetProtectedHistorySessionIdsAsync(
+        AppDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var result = new HashSet<long>();
+
+        var runningSessionId = await db.RunSessions
+            .AsNoTracking()
+            .Where(x => x.Status == SessionStatusRunning)
+            .OrderByDescending(x => x.Id)
+            .Select(x => (long?)x.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (runningSessionId.HasValue && runningSessionId.Value > 0)
+        {
+            result.Add(runningSessionId.Value);
+        }
+
+        var latestPlannedSessionId = await db.RunSessions
+            .AsNoTracking()
+            .Where(x => x.Status == SessionStatusPlanned)
+            .OrderByDescending(x => x.Id)
+            .Select(x => (long?)x.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (latestPlannedSessionId.HasValue && latestPlannedSessionId.Value > 0)
+        {
+            result.Add(latestPlannedSessionId.Value);
+        }
+
+        return result;
     }
 
     private static (string Code, string Message) EvaluateStartBlock(

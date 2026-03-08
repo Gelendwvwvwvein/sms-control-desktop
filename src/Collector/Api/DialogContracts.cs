@@ -5,6 +5,7 @@ public sealed class DialogSummaryDto
     public string DialogId { get; set; } = string.Empty;
     public string Phone { get; set; } = string.Empty;
     public string Fio { get; set; } = string.Empty;
+    public string ContractNumber { get; set; } = string.Empty;
     public DateTime LastMessageAtUtc { get; set; }
     public string LastDirection { get; set; } = string.Empty;
     public string LastText { get; set; } = string.Empty;
