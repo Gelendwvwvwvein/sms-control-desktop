@@ -215,6 +215,19 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
             channel.Status = StatusUnknown;
             channel.FailStreak = 0;
             channel.Alerted = false;
+            AppendDeviceEvent(
+                db,
+                eventType: "channel_probe_ambiguous",
+                severity: "warning",
+                message: $"Канал #{channel.Id}: gateway достижим, но probe-проверка неинформативна.{BuildLogDetailSuffix(detail)}",
+                payload: new
+                {
+                    channelId = channel.Id,
+                    channelName = channel.Name,
+                    endpoint = channel.Endpoint,
+                    status = StatusUnknown,
+                    detail
+                });
             await alerts.ResolveChannelAlertsAsync(
                 db,
                 channel.Id,
@@ -226,6 +239,20 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
             channel.Status = StatusError;
             channel.FailStreak = Math.Max(1, channel.FailStreak + 1);
             channel.Alerted = true;
+            AppendDeviceEvent(
+                db,
+                eventType: "channel_healthcheck_failed",
+                severity: "warning",
+                message: $"Канал #{channel.Id}: ошибка проверки подключения устройства.{BuildLogDetailSuffix(detail)}",
+                payload: new
+                {
+                    channelId = channel.Id,
+                    channelName = channel.Name,
+                    endpoint = channel.Endpoint,
+                    status = StatusError,
+                    failStreak = channel.FailStreak,
+                    detail
+                });
             await alerts.RaiseChannelErrorAsync(
                 db,
                 channel,
@@ -498,6 +525,49 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
     {
         if (string.IsNullOrWhiteSpace(status)) return string.Empty;
         return status.Trim().ToLowerInvariant();
+    }
+
+    private static void AppendDeviceEvent(
+        AppDbContext db,
+        string eventType,
+        string severity,
+        string message,
+        object payload)
+    {
+        EventService.Append(
+            db,
+            category: "device",
+            eventType: eventType,
+            severity: severity,
+            message: message,
+            payload: payload,
+            runSessionId: null,
+            runJobId: null);
+    }
+
+    private static string BuildLogDetailSuffix(string? detail)
+    {
+        var normalized = TruncateForLog(detail, 240);
+        return string.IsNullOrWhiteSpace(normalized) ? string.Empty : $" Детали: {normalized}";
+    }
+
+    private static string TruncateForLog(string? value, int maxLen)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var normalized = value
+            .Replace('\r', ' ')
+            .Replace('\n', ' ')
+            .Trim();
+        if (normalized.Length <= maxLen)
+        {
+            return normalized;
+        }
+
+        return $"{normalized[..maxLen]}...";
     }
 
     private static string BuildStateSignature(SenderChannelRecord channel)

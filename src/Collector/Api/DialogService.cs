@@ -373,6 +373,26 @@ public sealed class DialogService(SettingsStore settingsStore)
         };
 
         db.Messages.Add(messageRecord);
+        if (!sendResult.Success)
+        {
+            EventService.Append(
+                db,
+                category: "device",
+                eventType: "manual_send_failed",
+                severity: "warning",
+                message: $"Канал #{channel.Id}: ошибка ручной отправки через gateway. {sendResult.Detail}",
+                payload: new
+                {
+                    phone = normalizedPhone,
+                    channelId = channel.Id,
+                    channelName = channel.Name,
+                    endpoint = channel.Endpoint,
+                    statusCode = sendResult.StatusCode,
+                    detail = sendResult.Detail,
+                    responseBody = sendResult.ResponseBody,
+                    error = sendResult.Error
+                });
+        }
         await db.SaveChangesAsync(cancellationToken);
 
         return new DialogManualSendResultDto

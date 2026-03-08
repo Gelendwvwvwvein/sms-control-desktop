@@ -533,6 +533,32 @@ public sealed class RunDispatchService(
         }
         else
         {
+            if (channel is not null && string.Equals(result.Code, "GATEWAY_SEND_FAILED", StringComparison.Ordinal))
+            {
+                EventService.Append(
+                    db,
+                    category: "device",
+                    eventType: "channel_send_failed",
+                    severity: "warning",
+                    message: $"Канал #{channel.Id}: ошибка отправки через gateway.{BuildLogDetailSuffix(result.Detail)}",
+                    payload: new
+                    {
+                        runSessionId,
+                        runJobId = job.Id,
+                        channelId = channel.Id,
+                        channelName = channel.Name,
+                        endpoint = channel.Endpoint,
+                        code = result.Code,
+                        detail = result.Detail,
+                        statusCode = result.StatusCode,
+                        responseBody = result.ResponseBody,
+                        error = result.Error,
+                        transient = result.IsTransient
+                    },
+                    runSessionId: runSessionId,
+                    runJobId: job.Id);
+            }
+
             if (!result.IsTransient || job.Attempts >= job.MaxAttempts)
             {
                 job.Status = JobStatusFailed;

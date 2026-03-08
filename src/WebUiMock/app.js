@@ -1337,6 +1337,7 @@ function mapChannelDtoToUi(item) {
     token: item.tokenMasked || "",
     simPhone: item.simPhone || "",
     status: item.status || "unknown",
+    lastCheckedAtUtc: item.lastCheckedAtUtc || "",
     checkedAt: toMskTimeOrDash(item.lastCheckedAtUtc),
     failStreak: Number(item.failStreak ?? 0),
     alerted: Boolean(item.alerted)
@@ -1475,8 +1476,16 @@ function senderById(id) {
   return state.channels.find((x) => x.id === id) || null;
 }
 
-function channelStatusText(status) {
-  return CHANNEL_STATUS_TEXT[status] || CHANNEL_STATUS_TEXT.unknown;
+function channelStatusText(channelOrStatus) {
+  if (channelOrStatus && typeof channelOrStatus === "object") {
+    const status = channelOrStatus.status || "unknown";
+    if (status === "unknown") {
+      return channelOrStatus.lastCheckedAtUtc ? "Gateway достижим" : CHANNEL_STATUS_TEXT.unknown;
+    }
+    return CHANNEL_STATUS_TEXT[status] || CHANNEL_STATUS_TEXT.unknown;
+  }
+
+  return CHANNEL_STATUS_TEXT[channelOrStatus] || CHANNEL_STATUS_TEXT.unknown;
 }
 
 function isPhoneInStopList(phone) {
@@ -2426,7 +2435,7 @@ function renderChannels() {
       <td><code>${c.endpoint}</code></td>
       <td><code>${c.token || "****"}</code></td>
       <td>${c.simPhone || "-"}</td>
-      <td><span class="channel-pill ${c.status}">${channelStatusText(c.status)}</span></td>
+      <td><span class="channel-pill ${c.status}">${channelStatusText(c)}</span></td>
       <td>${c.checkedAt}</td>
       <td>
         <div class="actions slim">

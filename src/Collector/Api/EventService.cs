@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Collector.Data;
 using Collector.Data.Entities;
 using Microsoft.EntityFrameworkCore;
@@ -6,6 +7,29 @@ namespace Collector.Api;
 
 public sealed class EventService
 {
+    public static void Append(
+        AppDbContext db,
+        string category,
+        string eventType,
+        string severity,
+        string message,
+        object payload,
+        long? runSessionId = null,
+        long? runJobId = null)
+    {
+        db.Events.Add(new EventLogRecord
+        {
+            Category = category ?? string.Empty,
+            EventType = eventType ?? string.Empty,
+            Severity = severity ?? string.Empty,
+            Message = message ?? string.Empty,
+            RunSessionId = runSessionId,
+            RunJobId = runJobId,
+            PayloadJson = JsonSerializer.Serialize(payload),
+            CreatedAtUtc = DateTime.UtcNow
+        });
+    }
+
     public static ApiErrorDto? ValidateRunSessionId(long? runSessionId)
     {
         if (!runSessionId.HasValue)
