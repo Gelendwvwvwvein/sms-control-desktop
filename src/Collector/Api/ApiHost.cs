@@ -102,23 +102,31 @@ public static class ApiHost
 
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
-        IResult UiAsset(string path)
+        static void ApplyUiNoCacheHeaders(HttpContext ctx)
+        {
+            ctx.Response.Headers.CacheControl = "no-store, no-cache, must-revalidate";
+            ctx.Response.Headers.Pragma = "no-cache";
+            ctx.Response.Headers.Expires = "0";
+        }
+
+        IResult UiAsset(HttpContext ctx, string path)
         {
             if (!WebUiAssets.TryGet(path, out var data, out var contentType))
             {
                 return Results.NotFound();
             }
 
+            ApplyUiNoCacheHeaders(ctx);
             return Results.File(data, contentType);
         }
 
-        app.MapGet("/", () => UiAsset("/"));
-        app.MapGet("/index.html", () => UiAsset("/index.html"));
-        app.MapGet("/app.js", () => UiAsset("/app.js"));
-        app.MapGet("/styles.css", () => UiAsset("/styles.css"));
-        app.MapGet("/uikit.js", () => UiAsset("/uikit.js"));
-        app.MapGet("/favicon.svg", () => UiAsset("/favicon.svg"));
-        app.MapGet("/favicon.ico", () => UiAsset("/favicon.ico"));
+        app.MapGet("/", (HttpContext ctx) => UiAsset(ctx, "/"));
+        app.MapGet("/index.html", (HttpContext ctx) => UiAsset(ctx, "/index.html"));
+        app.MapGet("/app.js", (HttpContext ctx) => UiAsset(ctx, "/app.js"));
+        app.MapGet("/styles.css", (HttpContext ctx) => UiAsset(ctx, "/styles.css"));
+        app.MapGet("/uikit.js", (HttpContext ctx) => UiAsset(ctx, "/uikit.js"));
+        app.MapGet("/favicon.svg", (HttpContext ctx) => UiAsset(ctx, "/favicon.svg"));
+        app.MapGet("/favicon.ico", (HttpContext ctx) => UiAsset(ctx, "/favicon.ico"));
 
         app.MapGet("/api/errors/catalog", () =>
         {

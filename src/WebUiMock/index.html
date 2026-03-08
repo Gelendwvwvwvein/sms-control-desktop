@@ -7,7 +7,7 @@
   <link rel="icon" type="image/x-icon" href="/favicon.ico?v=20260224b">
   <link rel="shortcut icon" href="/favicon.ico?v=20260224b">
   <link rel="alternate icon" type="image/svg+xml" href="/favicon.svg?v=20260224b">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=20260309e">
 </head>
 <body>
   <div class="app-shell">
@@ -87,22 +87,27 @@
               </div>
               <div class="filter-group">
                 <div class="filter-group-head">
-                  <h4>Диапазоны просрочки</h4>
+                  <h4>Фильтры просрочки</h4>
                   <div class="actions slim">
                     <button class="ghost-btn" id="runOverdueSelectAll">Выбрать все</button>
                     <button class="ghost-btn" id="runOverdueClearAll">Снять все</button>
                   </div>
                 </div>
-                <div class="check-grid compact" id="runOverdueFilterBlock">
-                  <label><input type="checkbox" class="run-overdue" value="3-15" checked> Просрочка 3-15</label>
-                  <label><input type="checkbox" class="run-overdue" value="16-29" checked> Просрочка 16-29</label>
-                  <label><input type="checkbox" class="run-overdue" value="30-45" checked> Просрочка 30-45</label>
-                  <label><input type="checkbox" class="run-overdue" value="46-59" checked> Просрочка 46-59</label>
-                </div>
+                <div class="check-grid compact" id="runOverdueFilterBlock"></div>
               </div>
             </div>
             <label>Точная просрочка (день, опционально)
-              <input type="text" id="runExactDay" inputmode="numeric" placeholder="Например 30 или 5-15">
+              <input
+                type="text"
+                id="runExactDay"
+                name="run_exact_overdue"
+                inputmode="numeric"
+                autocomplete="off"
+                autocorrect="off"
+                autocapitalize="none"
+                spellcheck="false"
+                data-lpignore="true"
+                placeholder="Например 30 или 5-15">
             </label>
             <div class="actions">
               <button class="ghost-btn" id="runSelectAll">Выбрать всё</button>
@@ -158,15 +163,16 @@
           <div class="filter-group-head">
             <h3>История запусков</h3>
             <div class="actions slim">
+              <button class="ghost-btn" id="runHistoryOpenLatest">Актуальная очередь</button>
               <button class="ghost-btn" id="runHistoryRefresh">Обновить</button>
               <button class="danger-btn" id="runHistoryClear">Очистить историю</button>
             </div>
           </div>
-          <p class="muted-note">Показываются прошлые сессии. Текущая активная или последняя плановая очередь при очистке не удаляется.</p>
+          <p class="muted-note">Из истории можно открыть конкретную сессию как рабочую очередь: увидеть ошибки, сделать переотправку и продолжить запуск с точки остановки.</p>
           <div class="table-scroll">
             <table>
               <thead>
-                <tr><th>Сессия</th><th>Создана</th><th>Старт</th><th>Финиш</th><th>Статус</th><th>Итог</th><th>Заметка</th></tr>
+                <tr><th>Сессия</th><th>Создана</th><th>Старт</th><th>Финиш</th><th>Статус</th><th>Прогресс очереди</th><th>Заметка</th></tr>
               </thead>
               <tbody id="runHistoryBody"></tbody>
             </table>
@@ -194,7 +200,7 @@
             <label>Не писать повторно, если уже отправляли SMS за последние N дней
               <input id="cfgRecentSmsCooldownDays" type="number" min="0" max="365" value="0">
             </label>
-            <p class="muted-note">0 означает, что ограничение выключено. Сравнение идет по календарным датам на этом ПК, без учета часов.</p>
+            <p class="ui-notice ui-notice-info settings-cooldown-note"><strong>Подсказка:</strong> 0 означает, что ограничение выключено. Сравнение идет по календарным датам на этом ПК, без учета часов.</p>
             <div class="form-row">
               <label>Рабочее окно: начало<input id="cfgWorkWindowStart" type="time" value="08:00"></label>
               <label>Рабочее окно: конец<input id="cfgWorkWindowEnd" type="time" value="21:00"></label>
@@ -411,10 +417,6 @@
             <label>Просрочка
               <select id="clientsFilterOverdue">
                 <option value="all">Все</option>
-                <option value="3-15">3-15</option>
-                <option value="16-29">16-29</option>
-                <option value="30-45">30-45</option>
-                <option value="46-59">46-59</option>
               </select>
             </label>
           </div>
@@ -477,10 +479,6 @@
             <label>Просрочка
               <select id="queueFilterOverdue">
                 <option value="all">Все</option>
-                <option value="3-15">3-15</option>
-                <option value="16-29">16-29</option>
-                <option value="30-45">30-45</option>
-                <option value="46-59">46-59</option>
               </select>
             </label>
           </div>
@@ -521,8 +519,8 @@
         <div class="dialog-layout">
           <aside>
             <div class="filters">
-              <label>РџРѕРёСЃРє
-                <input id="dialogsSearch" placeholder="Р¤РРћ, С‚РµР»РµС„РѕРЅ РёР»Рё в„– РґРѕРіРѕРІРѕСЂР°">
+              <label>Поиск
+                <input id="dialogsSearch" placeholder="ФИО, телефон или № договора">
               </label>
             </div>
             <div class="dialog-list" id="dialogList"></div>
@@ -622,7 +620,31 @@
   </div>
 
   <div class="toast" id="toast"></div>
-  <script src="./uikit.js"></script>
-  <script src="./app.js"></script>
+  <pre class="ui-fatal-error hidden" id="fatalUiError"></pre>
+  <script>
+    (function setupFatalUiErrorBox() {
+      const buffer = [];
+      function render(kind, message) {
+        const el = document.getElementById("fatalUiError");
+        if (!el) return;
+        const text = String(message || "").trim();
+        buffer.push(`[${kind}] ${text || "unknown error"}`);
+        el.textContent = buffer.join("\n");
+        el.classList.remove("hidden");
+      }
+      window.addEventListener("error", (event) => {
+        const suffix = event.filename
+          ? ` @ ${event.filename}:${event.lineno || 0}:${event.colno || 0}`
+          : "";
+        render("error", `${event.message || (event.error && event.error.message) || "unknown error"}${suffix}`);
+      });
+      window.addEventListener("unhandledrejection", (event) => {
+        const reason = event.reason;
+        render("unhandledrejection", (reason && reason.message) || String(reason || "unknown rejection"));
+      });
+    })();
+  </script>
+  <script src="./uikit.js?v=20260309e"></script>
+  <script src="./app.js?v=20260309e"></script>
 </body>
 </html>

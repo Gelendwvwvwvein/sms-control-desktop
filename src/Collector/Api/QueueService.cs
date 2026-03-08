@@ -1333,13 +1333,30 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
 
         foreach (var raw in uniqueRanges)
         {
+            var singleMatch = OverdueSingleDayRegex().Match(raw);
+            if (singleMatch.Success)
+            {
+                var day = int.Parse(singleMatch.Groups[1].Value, CultureInfo.InvariantCulture);
+                if (day < 0)
+                {
+                    return new ApiErrorDto
+                    {
+                        Code = "QUEUE_FILTER_RANGE_INVALID",
+                        Message = $"Некорректное значение просрочки: '{raw}'."
+                    };
+                }
+
+                ranges.Add(new OverdueRange(day, day));
+                continue;
+            }
+
             var match = OverdueRangeRegex().Match(raw);
             if (!match.Success)
             {
                 return new ApiErrorDto
                 {
                     Code = "QUEUE_FILTER_RANGE_INVALID",
-                    Message = $"Некорректный диапазон просрочки: '{raw}'. Ожидается формат 'N-M'."
+                    Message = $"Некорректное значение просрочки: '{raw}'. Ожидается формат 'N' или 'N-M'."
                 };
             }
 

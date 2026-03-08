@@ -26,6 +26,7 @@ public sealed class RunDispatchService(
     private const string JobStatusSent = "sent";
     private const string JobStatusFailed = "failed";
     private const string JobErrorStoppedByOperator = "RUN_STOPPED_BY_OPERATOR";
+    private const string DebtStatusReady = "ready";
     private const string MessageDirectionOut = "out";
     private const string MessageGatewayStatusSent = "sent";
 
@@ -40,9 +41,17 @@ public sealed class RunDispatchService(
     private const int CommentWriteMaxAttempts = 3;
     private const int CommentWriteTimeoutMs = 20000;
     private const int DispatchAttemptTimeoutSeconds = 120;
+    private const int LiveDebtFreshTtlMinutes = 20;
+    private const int IdleDebtPrefetchCandidatesLimit = 24;
+    private const int IdleDebtPrefetchTimeoutMs = 20000;
+    private const int IdleDebtPrefetchSuccessCooldownSeconds = 45;
+    private const int IdleDebtPrefetchTransientFailureCooldownMinutes = 5;
+    private const int IdleDebtPrefetchNonRetryFailureCooldownMinutes = 30;
 
     private readonly Dictionary<long, DateTime> _channelCooldownUntilUtc = new();
+    private readonly Dictionary<string, DateTime> _debtPrefetchCooldownUntilUtc = new(StringComparer.Ordinal);
     private readonly object _cooldownLock = new();
+    private readonly object _debtPrefetchLock = new();
     private readonly object _replanSignalLock = new();
     private readonly TraccarHttpSmsSender _traccarSender = new(new HttpClient());
     private string _lastPlanningChannelsSignature = string.Empty;
@@ -180,6 +189,7 @@ public sealed class RunDispatchService(
         }
 
         var maxAttemptsThisTick = Math.Max(1, availableChannels.Count);
+        var processedDueJobThisTick = false;
         for (var i = 0; i < maxAttemptsThisTick; i++)
         {
             if (!await IsSessionStillRunningAsync(db, runSession.Id, cancellationToken))
@@ -198,8 +208,14 @@ public sealed class RunDispatchService(
 
             if (dueJob is null)
             {
+                if (!processedDueJobThisTick)
+                {
+                    await TryPrefetchDebtDuringIdleAsync(db, runSession, settings, tickNow, cancellationToken);
+                }
                 break;
             }
+
+            processedDueJobThisTick = true;
 
             if (await TryPromoteAlreadySentJobAsync(db, runSession.Id, dueJob, cancellationToken))
             {
@@ -1288,6 +1304,220 @@ public sealed class RunDispatchService(
         }
     }
 
+    private async Task TryPrefetchDebtDuringIdleAsync(
+        AppDbContext db,
+        RunSessionRecord runSession,
+        AppSettingsDto settings,
+        DateTime nowUtc,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(runSession.Mode, RunModeLive, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(settings.LoginUrl) ||
+            string.IsNullOrWhiteSpace(settings.Login) ||
+            string.IsNullOrWhiteSpace(settings.Password))
+        {
+            return;
+        }
+
+        var candidates = await db.RunJobs
+            .AsNoTracking()
+            .Where(x => x.RunSessionId == runSession.Id)
+            .Where(x => x.Status == JobStatusQueued || x.Status == JobStatusRetry)
+            .Where(x => !string.IsNullOrWhiteSpace(x.ExternalClientId))
+            .OrderBy(x => x.PlannedAtUtc)
+            .ThenBy(x => x.Id)
+            .Select(x => new { x.Id, x.ExternalClientId, x.PlannedAtUtc })
+            .Take(IdleDebtPrefetchCandidatesLimit)
+            .ToListAsync(cancellationToken);
+
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        var externalClientIds = candidates
+            .Select(x => NormalizeExternalClientId(x.ExternalClientId))
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (externalClientIds.Count == 0)
+        {
+            return;
+        }
+
+        var cacheByExternalClientId = await db.ClientDebtCache
+            .AsNoTracking()
+            .Where(x => externalClientIds.Contains(x.ExternalClientId))
+            .ToDictionaryAsync(x => x.ExternalClientId, StringComparer.Ordinal, cancellationToken);
+
+        foreach (var candidate in candidates)
+        {
+            var externalClientId = NormalizeExternalClientId(candidate.ExternalClientId);
+            if (string.IsNullOrWhiteSpace(externalClientId))
+            {
+                continue;
+            }
+
+            if (!CanPrefetchDebtNow(externalClientId, nowUtc))
+            {
+                continue;
+            }
+
+            cacheByExternalClientId.TryGetValue(externalClientId, out var cache);
+            if (IsDebtCacheFresh(cache, nowUtc))
+            {
+                SetDebtPrefetchCooldown(externalClientId, nowUtc.AddSeconds(IdleDebtPrefetchSuccessCooldownSeconds), nowUtc);
+                continue;
+            }
+
+            try
+            {
+                var fetchResult = await debtCacheService.FetchByExternalClientIdAsync(
+                    db,
+                    externalClientId,
+                    settings,
+                    new ClientDebtFetchRequestDto
+                    {
+                        TimeoutMs = IdleDebtPrefetchTimeoutMs,
+                        Headed = false
+                    },
+                    cancellationToken);
+
+                var success = fetchResult.Success && !string.IsNullOrWhiteSpace(fetchResult.Debt?.ExactTotalRaw);
+                if (success)
+                {
+                    SetDebtPrefetchCooldown(externalClientId, nowUtc.AddSeconds(IdleDebtPrefetchSuccessCooldownSeconds), nowUtc);
+                }
+                else
+                {
+                    var nonRetryable = IsDebtPrefetchNonRetryableFailure(fetchResult.Code);
+                    var backoffMinutes = nonRetryable
+                        ? IdleDebtPrefetchNonRetryFailureCooldownMinutes
+                        : IdleDebtPrefetchTransientFailureCooldownMinutes;
+                    SetDebtPrefetchCooldown(externalClientId, nowUtc.AddMinutes(backoffMinutes), nowUtc);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                SetDebtPrefetchCooldown(
+                    externalClientId,
+                    nowUtc.AddMinutes(IdleDebtPrefetchTransientFailureCooldownMinutes),
+                    nowUtc);
+
+                AddEvent(
+                    db,
+                    runSession.Id,
+                    runJobId: candidate.Id,
+                    eventType: "debt_prefetch_failed",
+                    severity: "warning",
+                    message: $"Не удалось выполнить prefetch суммы долга для задачи #{candidate.Id}.",
+                    payload: new
+                    {
+                        runSessionId = runSession.Id,
+                        runJobId = candidate.Id,
+                        externalClientId,
+                        error = ex.Message
+                    });
+                await db.SaveChangesAsync(cancellationToken);
+            }
+
+            // Ограничиваемся одним prefetch-запросом за idle-тик.
+            break;
+        }
+    }
+
+    private bool CanPrefetchDebtNow(string externalClientId, DateTime nowUtc)
+    {
+        lock (_debtPrefetchLock)
+        {
+            if (_debtPrefetchCooldownUntilUtc.TryGetValue(externalClientId, out var cooldownUntilUtc) &&
+                cooldownUntilUtc > nowUtc)
+            {
+                return false;
+            }
+
+            if (_debtPrefetchCooldownUntilUtc.Count > 2048)
+            {
+                var staleKeys = _debtPrefetchCooldownUntilUtc
+                    .Where(x => x.Value <= nowUtc)
+                    .Take(512)
+                    .Select(x => x.Key)
+                    .ToList();
+                foreach (var key in staleKeys)
+                {
+                    _debtPrefetchCooldownUntilUtc.Remove(key);
+                }
+            }
+
+            return true;
+        }
+    }
+
+    private void SetDebtPrefetchCooldown(string externalClientId, DateTime cooldownUntilUtc, DateTime nowUtc)
+    {
+        lock (_debtPrefetchLock)
+        {
+            _debtPrefetchCooldownUntilUtc[externalClientId] = cooldownUntilUtc;
+            if (_debtPrefetchCooldownUntilUtc.Count <= 4096)
+            {
+                return;
+            }
+
+            var staleKeys = _debtPrefetchCooldownUntilUtc
+                .Where(x => x.Value <= nowUtc)
+                .Take(1024)
+                .Select(x => x.Key)
+                .ToList();
+            foreach (var key in staleKeys)
+            {
+                _debtPrefetchCooldownUntilUtc.Remove(key);
+            }
+        }
+    }
+
+    private static bool IsDebtPrefetchNonRetryableFailure(string? code)
+    {
+        var normalizedCode = (code ?? string.Empty).Trim();
+        return string.Equals(normalizedCode, "DEBT_FETCH_SETTINGS_MISSING", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalizedCode, "DEBT_CARD_URL_MISSING", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(normalizedCode, "CLIENT_NOT_FOUND", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDebtCacheFresh(ClientDebtCacheRecord? cache, DateTime nowUtc)
+    {
+        if (cache is null)
+        {
+            return false;
+        }
+
+        if (!string.Equals(cache.Status, DebtStatusReady, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(cache.ExactTotalRaw))
+        {
+            return false;
+        }
+
+        var refreshedAtUtc = cache.LastFetchedAtUtc ?? cache.UpdatedAtUtc;
+        return refreshedAtUtc >= nowUtc.AddMinutes(-LiveDebtFreshTtlMinutes);
+    }
+
+    private static string NormalizeExternalClientId(string? externalClientId)
+    {
+        return (externalClientId ?? string.Empty).Trim();
+    }
+
     private async Task<DispatchAttemptResult> ExecuteAttemptAsync(
         AppDbContext db,
         AppSettingsDto settings,
@@ -1360,8 +1590,42 @@ public sealed class RunDispatchService(
         }
 
         var payloadTotal = ExtractPayloadString(job.PayloadJson, "totalWithCommissionRaw");
-        var forceDebtRefresh = string.Equals(runSession.Mode, "live", StringComparison.OrdinalIgnoreCase);
-        if (forceDebtRefresh || string.IsNullOrWhiteSpace(payloadTotal))
+        var liveMode = string.Equals(runSession.Mode, RunModeLive, StringComparison.OrdinalIgnoreCase);
+        var shouldFetchDebt = string.IsNullOrWhiteSpace(payloadTotal);
+
+        if (liveMode)
+        {
+            var normalizedExternalClientId = NormalizeExternalClientId(job.ExternalClientId);
+            if (!string.IsNullOrWhiteSpace(normalizedExternalClientId))
+            {
+                var cache = await db.ClientDebtCache
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(x => x.ExternalClientId == normalizedExternalClientId, cancellationToken);
+
+                if (IsDebtCacheFresh(cache, nowUtc))
+                {
+                    shouldFetchDebt = false;
+                    var cachedExactRaw = (cache?.ExactTotalRaw ?? string.Empty).Trim();
+                    if (!string.IsNullOrWhiteSpace(cachedExactRaw) &&
+                        !string.Equals(payloadTotal, cachedExactRaw, StringComparison.Ordinal))
+                    {
+                        job.PayloadJson = UpsertPayloadField(job.PayloadJson, "totalWithCommissionRaw", cachedExactRaw);
+                        db.RunJobs.Update(job);
+                        await db.SaveChangesAsync(cancellationToken);
+                    }
+                }
+                else
+                {
+                    shouldFetchDebt = true;
+                }
+            }
+            else
+            {
+                shouldFetchDebt = true;
+            }
+        }
+
+        if (shouldFetchDebt)
         {
             var debtFetch = await debtCacheService.FetchByExternalClientIdAsync(
                 db,
@@ -1381,7 +1645,7 @@ public sealed class RunDispatchService(
 
             job.PayloadJson = UpsertPayloadField(job.PayloadJson, "totalWithCommissionRaw", debtFetch.Debt.ExactTotalRaw);
             db.RunJobs.Update(job);
-            if (forceDebtRefresh)
+            if (liveMode)
             {
                 AddEvent(
                     db,

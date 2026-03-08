@@ -1,4 +1,10 @@
 .DS_Store
 out/
+tmp/
 **/bin/
 **/obj/
+.vs/
+.idea/
+*.user
+*.suo
+*.log
