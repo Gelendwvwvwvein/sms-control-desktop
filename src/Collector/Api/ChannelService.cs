@@ -193,13 +193,11 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
             };
         }
 
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCts.Token);
         var assessment = await CheckGatewayEndpointAsync(
             channel.Endpoint,
             channel.Token,
-            cancellationToken,
-            linkedCts.Token);
+            timeoutMs,
+            cancellationToken);
         detail = assessment.Detail;
 
         channel.LastCheckedAtUtc = checkedAt;
@@ -361,17 +359,28 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
     private async Task<GatewayHealthAssessment> CheckGatewayEndpointAsync(
         string endpoint,
         string token,
-        CancellationToken externalCancellationToken,
-        CancellationToken probeCancellationToken)
+        int timeoutMs,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(token))
         {
             return GatewayHealthAssessment.Error("У канала не задан endpoint или token.");
         }
 
-        var withToken = await SendProbeAsync(endpoint, token, externalCancellationToken, probeCancellationToken);
+        var withToken = await SendProbeAsync(endpoint, token, timeoutMs, cancellationToken);
         if (!withToken.TransportOk)
         {
+            if (LooksLikeProbeTimeout(withToken.ErrorDetail))
+            {
+                var reachability = await SendReachabilityAsync(endpoint, timeoutMs, cancellationToken);
+                if (reachability.TransportOk && GatewayLooksReachable(reachability.StatusCode))
+                {
+                    return GatewayHealthAssessment.Unknown(
+                        "Gateway достижим по GET, но пустой POST probe не успел ответить в отведенное время. " +
+                        "Для некоторых устройств это не мешает реальной отправке SMS.");
+                }
+            }
+
             return GatewayHealthAssessment.Error(withToken.ErrorDetail);
         }
 
@@ -409,7 +418,7 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
 
         if (statusCode.Value is HttpStatusCode.BadRequest or HttpStatusCode.UnprocessableEntity)
         {
-            var withoutToken = await SendProbeAsync(endpoint, null, externalCancellationToken, probeCancellationToken);
+            var withoutToken = await SendProbeAsync(endpoint, null, timeoutMs, cancellationToken);
             if (withoutToken.TransportOk &&
                 withoutToken.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
             {
@@ -441,11 +450,13 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
     private async Task<ProbeResult> SendProbeAsync(
         string endpoint,
         string? token,
-        CancellationToken externalCancellationToken,
-        CancellationToken probeCancellationToken)
+        int timeoutMs,
+        CancellationToken externalCancellationToken)
     {
         try
         {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(externalCancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
             using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
             if (!string.IsNullOrWhiteSpace(token))
             {
@@ -459,8 +470,8 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
                 message = ""
             });
 
-            using var response = await httpClient.SendAsync(request, probeCancellationToken);
-            var body = await response.Content.ReadAsStringAsync(probeCancellationToken);
+            using var response = await httpClient.SendAsync(request, timeoutCts.Token);
+            var body = await response.Content.ReadAsStringAsync(timeoutCts.Token);
             return new ProbeResult(
                 TransportOk: true,
                 StatusCode: response.StatusCode,
@@ -478,6 +489,46 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
                 StatusCode: null,
                 ResponseBody: string.Empty,
                 ErrorDetail: "Таймаут при проверке канала.");
+        }
+        catch (Exception ex)
+        {
+            return new ProbeResult(
+                TransportOk: false,
+                StatusCode: null,
+                ResponseBody: string.Empty,
+                ErrorDetail: ex.Message);
+        }
+    }
+
+    private async Task<ProbeResult> SendReachabilityAsync(
+        string endpoint,
+        int timeoutMs,
+        CancellationToken externalCancellationToken)
+    {
+        try
+        {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(externalCancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
+            using var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
+            using var response = await httpClient.SendAsync(request, timeoutCts.Token);
+            var body = await response.Content.ReadAsStringAsync(timeoutCts.Token);
+            return new ProbeResult(
+                TransportOk: true,
+                StatusCode: response.StatusCode,
+                ResponseBody: body,
+                ErrorDetail: string.Empty);
+        }
+        catch (OperationCanceledException) when (externalCancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            return new ProbeResult(
+                TransportOk: false,
+                StatusCode: null,
+                ResponseBody: string.Empty,
+                ErrorDetail: "Таймаут при GET-проверке endpoint.");
         }
         catch (Exception ex)
         {
@@ -512,6 +563,31 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
     private static string NormalizeEndpoint(string endpoint)
     {
         return endpoint.Trim().TrimEnd('/') + "/";
+    }
+
+    private static bool GatewayLooksReachable(HttpStatusCode? statusCode)
+    {
+        if (!statusCode.HasValue)
+        {
+            return false;
+        }
+
+        var code = (int)statusCode.Value;
+        return (code >= 200 && code < 400) ||
+               statusCode.Value is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
+    }
+
+    private static bool LooksLikeProbeTimeout(string? detail)
+    {
+        var normalized = (detail ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return false;
+        }
+
+        return normalized.Contains("Таймаут", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("timed out", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string NormalizePhone(string phone)

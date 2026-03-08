@@ -5381,7 +5381,7 @@ async function checkChannelById(channelId, options = {}) {
   const channel = senderById(channelId);
   if (!channel) return false;
   try {
-    const result = await fetchApiJson(`/api/channels/${encodeURIComponent(channelId)}/check?timeoutMs=5000`, {
+    const result = await fetchApiJson(`/api/channels/${encodeURIComponent(channelId)}/check?timeoutMs=15000`, {
       method: "POST"
     });
     await refreshChannelsFromBackend({ silent: true });
@@ -5445,7 +5445,7 @@ async function setChannelManualStatus(channelId, targetStatus) {
 
 async function checkChannels() {
   try {
-    const result = await fetchApiJson("/api/channels/check?timeoutMs=5000", { method: "POST" });
+    const result = await fetchApiJson("/api/channels/check?timeoutMs=15000", { method: "POST" });
     await refreshChannelsFromBackend({ silent: true });
     await refreshAlertsFromBackend({ silent: true });
     updateMetrics();
@@ -6848,6 +6848,8 @@ function bindEvents() {
         addRunLog(`Переотправка: переведено в «Повтор» ${retried} задач (ошибка: ${fromFailed}, остановлено: ${fromStopped}).`);
       }
     } catch (error) {
+      await refreshChannelsFromBackend({ silent: true });
+      await refreshAlertsFromBackend({ silent: true });
       toast(`Не удалось переотправить задачи: ${error?.message || "ошибка backend"}`);
     }
   });
@@ -6913,6 +6915,8 @@ function bindEvents() {
       $("manualInput").value = "";
       await refreshDialogMessagesFromBackend(dialog.phone, { silent: true });
       await refreshDialogsFromBackend({ silent: true, ensurePhone: dialog.phone });
+      await refreshChannelsFromBackend({ silent: true });
+      await refreshAlertsFromBackend({ silent: true });
       await refreshReportsFromBackend({ silent: true });
       addRunLog(`Ручное сообщение отправлено клиенту ${dialog.phone} через канал ${result?.channelName || "-"}.`);
       toast("Ручное сообщение отправлено");

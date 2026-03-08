@@ -7,8 +7,9 @@ using System.Globalization;
 
 namespace Collector.Api;
 
-public sealed class DialogService(SettingsStore settingsStore)
+public sealed class DialogService(SettingsStore settingsStore, AlertService alertService)
 {
+    private const string ChannelStatusOnline = "online";
     private const string ChannelStatusError = "error";
     private const string ChannelStatusOffline = "offline";
 
@@ -393,6 +394,43 @@ public sealed class DialogService(SettingsStore settingsStore)
                     error = sendResult.Error
                 });
         }
+
+        var hadChannelError = string.Equals(channel.Status, ChannelStatusError, StringComparison.OrdinalIgnoreCase) ||
+                              channel.FailStreak > 0 ||
+                              channel.Alerted;
+        if (sendResult.Success)
+        {
+            channel.Status = ChannelStatusOnline;
+            channel.FailStreak = 0;
+            channel.Alerted = false;
+            if (hadChannelError)
+            {
+                await alertService.ResolveChannelAlertsAsync(
+                    db,
+                    channel.Id,
+                    "Канал восстановлен после успешной ручной отправки.",
+                    cancellationToken);
+            }
+        }
+        else
+        {
+            channel.FailStreak = Math.Max(1, channel.FailStreak + 1);
+            if (channel.FailStreak >= 3)
+            {
+                channel.Status = ChannelStatusError;
+                channel.Alerted = true;
+                await alertService.RaiseChannelErrorAsync(
+                    db,
+                    channel,
+                    "GATEWAY_SEND_FAILED",
+                    sendResult.Detail,
+                    runSessionId: null,
+                    runJobId: null,
+                    cancellationToken);
+            }
+        }
+
+        db.SenderChannels.Update(channel);
         await db.SaveChangesAsync(cancellationToken);
 
         return new DialogManualSendResultDto
