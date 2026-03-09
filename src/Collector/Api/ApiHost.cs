@@ -26,19 +26,11 @@ public static class ApiHost
 
         var portRaw = GetArg(args, "--port");
         var port = int.TryParse(portRaw, out var parsedPort) ? parsedPort : 5057;
-        var hostRaw = GetArg(args, "--host");
-        var host = string.IsNullOrWhiteSpace(hostRaw)
-            ? (Environment.GetEnvironmentVariable("SMS_API_HOST") ?? string.Empty).Trim()
-            : hostRaw.Trim();
         if (HasFlag(args, "--lan"))
         {
-            host = "0.0.0.0";
+            Console.WriteLine("Flag --lan ignored: API is localhost-only.");
         }
-
-        if (string.IsNullOrWhiteSpace(host))
-        {
-            host = "127.0.0.1";
-        }
+        var host = "127.0.0.1";
 
         var url = $"http://{host}:{port}";
 
@@ -1923,79 +1915,83 @@ public static class ApiHost
         });
 
         var localUiUrl = $"http://127.0.0.1:{port}/";
-        Console.WriteLine($"Backend API started on {url}");
-        Console.WriteLine($"Local UI: {localUiUrl}");
-        Console.WriteLine($"DB path: {resolvedDbPath}");
-        Console.WriteLine("Available endpoints:");
-        Console.WriteLine("  GET /health");
-        Console.WriteLine("  GET /api/errors/catalog");
-        Console.WriteLine("  GET /api/audit");
-        Console.WriteLine("  GET/PUT /api/settings");
-        Console.WriteLine("  GET/PUT /api/settings/comment-rules");
-        Console.WriteLine("  GET /api/reports/weekly");
-        Console.WriteLine("  POST /api/rocketman/comment/test");
-        Console.WriteLine("  GET/POST /api/channels");
-        Console.WriteLine("  PUT /api/channels/{id}");
-        Console.WriteLine("  DELETE /api/channels/{id}");
-        Console.WriteLine("  PATCH /api/channels/{id}/status");
-        Console.WriteLine("  POST /api/channels/check");
-        Console.WriteLine("  POST /api/channels/{id}/check");
-        Console.WriteLine("  GET /api/templates/meta");
-        Console.WriteLine("  GET /api/templates");
-        Console.WriteLine("  GET /api/templates/active");
-        Console.WriteLine("  GET /api/templates/{id}");
-        Console.WriteLine("  POST /api/templates");
-        Console.WriteLine("  PUT /api/templates/{id}");
-        Console.WriteLine("  PATCH /api/templates/{id}/status");
-        Console.WriteLine("  GET /api/manual-presets");
-        Console.WriteLine("  GET /api/manual-presets/{id}");
-        Console.WriteLine("  POST /api/manual-presets");
-        Console.WriteLine("  PUT /api/manual-presets/{id}");
-        Console.WriteLine("  DELETE /api/manual-presets/{id}");
-        Console.WriteLine("  GET /api/dialogs");
-        Console.WriteLine("  GET /api/dialogs/by-client/{externalClientId}");
-        Console.WriteLine("  GET /api/dialogs/by-phone/{phone}/messages");
-        Console.WriteLine("  GET /api/dialogs/by-phone/{phone}/draft");
-        Console.WriteLine("  PUT /api/dialogs/by-phone/{phone}/draft");
-        Console.WriteLine("  DELETE /api/dialogs/by-phone/{phone}/draft");
-        Console.WriteLine("  POST /api/dialogs/by-phone/{phone}/send");
-        Console.WriteLine("  DELETE /api/dialogs/by-phone/{phone}");
-        Console.WriteLine("  POST /api/dialogs/prune");
-        Console.WriteLine("  GET /api/stop-list");
-        Console.WriteLine("  GET /api/stop-list/by-phone/{phone}");
-        Console.WriteLine("  GET /api/stop-list/{id}");
-        Console.WriteLine("  POST /api/stop-list");
-        Console.WriteLine("  PUT /api/stop-list/{id}");
-        Console.WriteLine("  DELETE /api/stop-list/{id}");
-        Console.WriteLine("  DELETE /api/stop-list/by-phone/{phone}");
-        Console.WriteLine("  POST /api/stop-list/bulk/add");
-        Console.WriteLine("  POST /api/stop-list/bulk/remove");
-        Console.WriteLine("  POST /api/stop-list/bulk/deactivate");
-        Console.WriteLine("  GET /api/alerts");
-        Console.WriteLine("  PATCH /api/alerts/{id}/status");
-        Console.WriteLine("  GET /api/events");
-        Console.WriteLine("  GET /api/events/run");
-        Console.WriteLine("  POST /api/clients/sync");
-        Console.WriteLine("  GET /api/clients/sync-status");
-        Console.WriteLine("  GET /api/clients");
-        Console.WriteLine("  GET /api/clients/{externalClientId}/debt");
-        Console.WriteLine("  POST /api/clients/{externalClientId}/debt/fetch");
-        Console.WriteLine("  POST /api/queue/preview");
-        Console.WriteLine("  POST /api/queue/forecast");
-        Console.WriteLine("  POST /api/queue/build");
-        Console.WriteLine("  GET /api/queue");
-        Console.WriteLine("  POST /api/queue/{jobId}/preview/rebuild");
-        Console.WriteLine("  PUT /api/queue/{jobId}/message-override");
-        Console.WriteLine("  DELETE /api/queue/{jobId}/message-override");
-        Console.WriteLine("  POST /api/queue/jobs/remove");
-        Console.WriteLine("  POST /api/queue/retry-errors");
-        Console.WriteLine("  POST /api/queue/bulk/set-template");
-        Console.WriteLine("  GET /api/run/status");
-        Console.WriteLine("  GET /api/run/history");
-        Console.WriteLine("  DELETE /api/run/history");
-        Console.WriteLine("  POST /api/run/start");
-        Console.WriteLine("  POST /api/run/stop");
-        Console.WriteLine("  POST /api/app/shutdown");
+        var hostLifetime = app.Services.GetRequiredService<IHostApplicationLifetime>();
+        hostLifetime.ApplicationStarted.Register(() =>
+        {
+            Console.WriteLine($"Backend API started on {url}");
+            Console.WriteLine($"Local UI: {localUiUrl}");
+            Console.WriteLine($"DB path: {resolvedDbPath}");
+            Console.WriteLine("Available endpoints:");
+            Console.WriteLine("  GET /health");
+            Console.WriteLine("  GET /api/errors/catalog");
+            Console.WriteLine("  GET /api/audit");
+            Console.WriteLine("  GET/PUT /api/settings");
+            Console.WriteLine("  GET/PUT /api/settings/comment-rules");
+            Console.WriteLine("  GET /api/reports/weekly");
+            Console.WriteLine("  POST /api/rocketman/comment/test");
+            Console.WriteLine("  GET/POST /api/channels");
+            Console.WriteLine("  PUT /api/channels/{id}");
+            Console.WriteLine("  DELETE /api/channels/{id}");
+            Console.WriteLine("  PATCH /api/channels/{id}/status");
+            Console.WriteLine("  POST /api/channels/check");
+            Console.WriteLine("  POST /api/channels/{id}/check");
+            Console.WriteLine("  GET /api/templates/meta");
+            Console.WriteLine("  GET /api/templates");
+            Console.WriteLine("  GET /api/templates/active");
+            Console.WriteLine("  GET /api/templates/{id}");
+            Console.WriteLine("  POST /api/templates");
+            Console.WriteLine("  PUT /api/templates/{id}");
+            Console.WriteLine("  PATCH /api/templates/{id}/status");
+            Console.WriteLine("  GET /api/manual-presets");
+            Console.WriteLine("  GET /api/manual-presets/{id}");
+            Console.WriteLine("  POST /api/manual-presets");
+            Console.WriteLine("  PUT /api/manual-presets/{id}");
+            Console.WriteLine("  DELETE /api/manual-presets/{id}");
+            Console.WriteLine("  GET /api/dialogs");
+            Console.WriteLine("  GET /api/dialogs/by-client/{externalClientId}");
+            Console.WriteLine("  GET /api/dialogs/by-phone/{phone}/messages");
+            Console.WriteLine("  GET /api/dialogs/by-phone/{phone}/draft");
+            Console.WriteLine("  PUT /api/dialogs/by-phone/{phone}/draft");
+            Console.WriteLine("  DELETE /api/dialogs/by-phone/{phone}/draft");
+            Console.WriteLine("  POST /api/dialogs/by-phone/{phone}/send");
+            Console.WriteLine("  DELETE /api/dialogs/by-phone/{phone}");
+            Console.WriteLine("  POST /api/dialogs/prune");
+            Console.WriteLine("  GET /api/stop-list");
+            Console.WriteLine("  GET /api/stop-list/by-phone/{phone}");
+            Console.WriteLine("  GET /api/stop-list/{id}");
+            Console.WriteLine("  POST /api/stop-list");
+            Console.WriteLine("  PUT /api/stop-list/{id}");
+            Console.WriteLine("  DELETE /api/stop-list/{id}");
+            Console.WriteLine("  DELETE /api/stop-list/by-phone/{phone}");
+            Console.WriteLine("  POST /api/stop-list/bulk/add");
+            Console.WriteLine("  POST /api/stop-list/bulk/remove");
+            Console.WriteLine("  POST /api/stop-list/bulk/deactivate");
+            Console.WriteLine("  GET /api/alerts");
+            Console.WriteLine("  PATCH /api/alerts/{id}/status");
+            Console.WriteLine("  GET /api/events");
+            Console.WriteLine("  GET /api/events/run");
+            Console.WriteLine("  POST /api/clients/sync");
+            Console.WriteLine("  GET /api/clients/sync-status");
+            Console.WriteLine("  GET /api/clients");
+            Console.WriteLine("  GET /api/clients/{externalClientId}/debt");
+            Console.WriteLine("  POST /api/clients/{externalClientId}/debt/fetch");
+            Console.WriteLine("  POST /api/queue/preview");
+            Console.WriteLine("  POST /api/queue/forecast");
+            Console.WriteLine("  POST /api/queue/build");
+            Console.WriteLine("  GET /api/queue");
+            Console.WriteLine("  POST /api/queue/{jobId}/preview/rebuild");
+            Console.WriteLine("  PUT /api/queue/{jobId}/message-override");
+            Console.WriteLine("  DELETE /api/queue/{jobId}/message-override");
+            Console.WriteLine("  POST /api/queue/jobs/remove");
+            Console.WriteLine("  POST /api/queue/retry-errors");
+            Console.WriteLine("  POST /api/queue/bulk/set-template");
+            Console.WriteLine("  GET /api/run/status");
+            Console.WriteLine("  GET /api/run/history");
+            Console.WriteLine("  DELETE /api/run/history");
+            Console.WriteLine("  POST /api/run/start");
+            Console.WriteLine("  POST /api/run/stop");
+            Console.WriteLine("  POST /api/app/shutdown");
+        });
         await app.RunAsync();
     }
 

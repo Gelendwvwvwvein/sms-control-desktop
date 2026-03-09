@@ -441,6 +441,9 @@ public sealed class RunService(SettingsStore settingsStore)
         RunSessionSummaryDto? session,
         bool allowLiveDispatch)
     {
+        var isStoppedSession = session is not null &&
+                               string.Equals(session.Status, SessionStatusStopped, StringComparison.Ordinal);
+
         if (status.HasRunningSession)
         {
             return (
@@ -492,7 +495,7 @@ public sealed class RunService(SettingsStore settingsStore)
                 "У выбранной сессии не указан snapshot. Сформируйте очередь заново.");
         }
 
-        if (status.LatestSnapshotId > session.SnapshotId.Value)
+        if (!isStoppedSession && status.LatestSnapshotId > session.SnapshotId.Value)
         {
             return (
                 "RUN_QUEUE_STALE",

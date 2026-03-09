@@ -2278,19 +2278,24 @@ function renderClientsBulkUi(visibleRows = getVisibleClientRows()) {
   const selectedTotal = selectedRows.length;
   const selectedVisible = visibleIds.filter((id) => state.selectedClients.has(id)).length;
   const selectedWithExternalId = selectedRows.filter((c) => String(c.externalClientId || "").trim() !== "").length;
+  const selectedWithPhone = selectedRows.filter((c) => normalizePhone(c.phone)).length;
   const returnableCount = selectedRows.filter((c) => state.excludedClientIds.has(c.id)).length;
   const selectedInStopList = selectedRows.filter((c) => isPhoneInStopList(c.phone)).length;
   const selectedOutStopList = selectedTotal - selectedInStopList;
-  const canBulkAddToStopList = selectedTotal > 0 && selectedOutStopList === selectedTotal;
-  const canBulkRemoveFromStopList = selectedTotal > 0 && selectedInStopList === selectedTotal;
+  const allWithExternalId = selectedTotal > 0 && selectedWithExternalId === selectedTotal;
+  const allWithPhone = selectedTotal > 0 && selectedWithPhone === selectedTotal;
+  const canBulkAddToStopList = allWithPhone && selectedOutStopList === selectedTotal;
+  const canBulkRemoveFromStopList = allWithPhone && selectedInStopList === selectedTotal;
+  const canBulkFetchDebt = allWithExternalId && !state.bulkDebtInProgress;
+  const canBulkReturnToPlan = selectedTotal > 0 && returnableCount === selectedTotal && !state.runRuntime;
 
   $("clientsBulkMeta").textContent = `Выбрано: ${selectedTotal} (видимо: ${selectedVisible})`;
   $("clientsSelectVisible").disabled = !hasAnyRows;
   $("clientsClearSelection").disabled = selectedTotal === 0;
-  $("clientsBulkFetchDebt").disabled = selectedTotal === 0 || selectedWithExternalId === 0 || state.bulkDebtInProgress;
+  $("clientsBulkFetchDebt").disabled = !canBulkFetchDebt;
   $("clientsBulkAddStop").disabled = !canBulkAddToStopList;
   $("clientsBulkRemoveStop").disabled = !canBulkRemoveFromStopList;
-  $("clientsBulkReturnPlan").disabled = selectedTotal === 0 || Boolean(state.runRuntime) || returnableCount === 0;
+  $("clientsBulkReturnPlan").disabled = !canBulkReturnToPlan;
 
   const selectAll = $("clientsSelectAllRows");
   selectAll.disabled = visibleIds.length === 0;
@@ -2305,16 +2310,27 @@ function renderQueueBulkUi(visibleRows = getVisibleQueueRows()) {
   const selectedTotal = selectedRows.length;
   const selectedVisible = visibleIds.filter((id) => state.selectedQueue.has(id)).length;
   const selectedWithExternalId = selectedRows.filter((q) => String(q.externalClientId || "").trim() !== "").length;
-  const removableFromPlan = selectedRows.filter((q) => ["queued", "retry"].includes(q.status)).length;
+  const selectedWithPhone = selectedRows.filter((q) => normalizePhone(q.phone)).length;
+  const selectedInStopList = selectedRows.filter((q) => isPhoneInStopList(q.phone)).length;
+  const selectedOutStopList = selectedTotal - selectedInStopList;
+  const allWithExternalId = selectedTotal > 0 && selectedWithExternalId === selectedTotal;
+  const allWithPhone = selectedTotal > 0 && selectedWithPhone === selectedTotal;
+  const removableStatuses = new Set(["queued", "retry", "stopped"]);
+  const templateAssignableStatuses = new Set(["queued", "retry"]);
+  const allRemovableFromPlan = selectedTotal > 0 && selectedRows.every((q) => removableStatuses.has(q.status));
+  const allTemplateAssignableByStatus = selectedTotal > 0 && selectedRows.every((q) => templateAssignableStatuses.has(q.status));
+  const canBulkFetchDebt = allWithExternalId && !state.bulkDebtInProgress;
+  const canBulkAddToStopList = allWithPhone && selectedOutStopList === selectedTotal;
+  const canBulkRemoveFromStopList = allWithPhone && selectedInStopList === selectedTotal;
+  let canBulkSetTemplate = !state.runRuntime && allTemplateAssignableByStatus;
 
   $("queueBulkMeta").textContent = `Выбрано: ${selectedTotal} (видимо: ${selectedVisible})`;
   $("queueSelectVisible").disabled = !hasAnyRows;
   $("queueClearSelection").disabled = selectedTotal === 0;
-  $("queueBulkFetchDebt").disabled = selectedTotal === 0 || selectedWithExternalId === 0 || state.bulkDebtInProgress;
-  $("queueBulkAddStop").disabled = selectedTotal === 0;
-  $("queueBulkRemoveStop").disabled = selectedTotal === 0;
-  $("queueBulkRemovePlan").disabled = selectedTotal === 0 || Boolean(state.runRuntime) || removableFromPlan === 0;
-  $("queueBulkSetTemplate").disabled = selectedTotal === 0 || Boolean(state.runRuntime);
+  $("queueBulkFetchDebt").disabled = !canBulkFetchDebt;
+  $("queueBulkAddStop").disabled = !canBulkAddToStopList;
+  $("queueBulkRemoveStop").disabled = !canBulkRemoveFromStopList;
+  $("queueBulkRemovePlan").disabled = Boolean(state.runRuntime) || !allRemovableFromPlan;
 
   const templateSelect = $("queueBulkTemplate");
   const activeTemplates = state.templates
@@ -2327,7 +2343,7 @@ function renderQueueBulkUi(visibleRows = getVisibleQueueRows()) {
   if (activeTemplates.length === 0) {
     templateSelect.innerHTML = '<option value="">Нет активных шаблонов</option>';
     templateSelect.disabled = true;
-    $("queueBulkSetTemplate").disabled = true;
+    canBulkSetTemplate = false;
   } else {
     const current = templateSelect.value;
     templateSelect.innerHTML = activeTemplates.map((tpl) => `
@@ -2337,7 +2353,19 @@ function renderQueueBulkUi(visibleRows = getVisibleQueueRows()) {
       templateSelect.value = current;
     }
     templateSelect.disabled = false;
+
+    const selectedTemplateId = Number(templateSelect.value || 0);
+    const selectedTemplate = getTemplateById(selectedTemplateId);
+    if (!selectedTemplate) {
+      canBulkSetTemplate = false;
+    } else if (selectedTotal > 0) {
+      const allOverdueCompatible = selectedRows.every((q) => canApplyTemplateToOverdue(selectedTemplate, q.daysOverdue));
+      if (!allOverdueCompatible) {
+        canBulkSetTemplate = false;
+      }
+    }
   }
+  $("queueBulkSetTemplate").disabled = !canBulkSetTemplate;
 
   const selectAll = $("queueSelectAllRows");
   selectAll.disabled = visibleIds.length === 0;
@@ -2412,6 +2440,8 @@ function renderDbSyncState() {
     state.clientsDb.actualized &&
     Boolean(state.clientsDb.sourceMode) &&
     state.clientsDb.sourceMode !== expectedSourceMode;
+  const selectedSessionStatus = String(state.queueSession?.status || "").trim().toLowerCase();
+  const resumingStoppedSession = selectedSessionStatus === "stopped";
 
   if (syncBtn) {
     syncBtn.textContent = "Актуализировать базу клиентов";
@@ -2421,17 +2451,21 @@ function renderDbSyncState() {
   if (stopBtn) stopBtn.disabled = !state.runRuntime;
   if (globalStopBtn) globalStopBtn.disabled = !state.runRuntime;
   const startBlocked =
-    !state.clientsDb.actualized ||
+    (!resumingStoppedSession && !state.clientsDb.actualized) ||
     state.clientsDb.syncing ||
     !state.planPrepared ||
-    state.planStale ||
+    (state.planStale && !resumingStoppedSession) ||
     state.queue.length === 0 ||
     !state.runCanStart ||
-    sourceModeMismatch;
+    (!resumingStoppedSession && sourceModeMismatch);
   if (startBtn) startBtn.disabled = startBlocked;
   if (globalStartBtn) globalStartBtn.disabled = startBlocked;
 
   if (!statusEl) return;
+  if (resumingStoppedSession) {
+    setNotice("dbSyncStatus", "Открыта остановленная сессия из истории. Можно продолжить рассылку кнопкой «Старт».", "info");
+    return;
+  }
   if (state.clientsDb.syncing) {
     setNotice("dbSyncStatus", "Идет актуализация базы клиентов...", "info");
     return;
@@ -4317,6 +4351,7 @@ function renderClientsDb() {
     const dialogMeta = dialogStatusByPhone(client.phone);
     const inPlan = hasClientInQueue(client.id);
     const inStop = isPhoneInStopList(client.phone);
+    const hasPhone = Boolean(normalizePhone(client.phone));
     const excluded = state.excludedClientIds.has(client.id);
     let planText = "Нет";
     if (!state.planPrepared) {
@@ -4344,8 +4379,8 @@ function renderClientsDb() {
         <td>${planText}</td>
         <td>
           <div class="actions slim">
-            <button class="ghost-btn" data-action="client-open-dialog" data-client-phone="${client.phone}">В диалог</button>
-            <button class="ghost-btn" data-action="client-toggle-stop" data-client-phone="${client.phone}">${inStop ? "Убрать из стоп-листа" : "В стоп-лист"}</button>
+            <button class="ghost-btn" data-action="client-open-dialog" data-client-phone="${client.phone}" ${hasPhone ? "" : "disabled"}>В диалог</button>
+            <button class="ghost-btn" data-action="client-toggle-stop" data-client-phone="${client.phone}" ${hasPhone ? "" : "disabled"}>${inStop ? "Убрать из стоп-листа" : "В стоп-лист"}</button>
             ${excluded ? `<button class="ghost-btn" data-action="client-return-plan" data-client-id="${client.id}" ${state.runRuntime ? "disabled" : ""}>Вернуть в план</button>` : ""}
           </div>
         </td>
@@ -4386,9 +4421,9 @@ function renderQueue() {
       <td class="cell-ellipsis"><span>${dialogStatusByPhone(q.phone).text}</span></td>
       <td>
         <div class="actions slim">
-          <button class="ghost-btn" data-action="queue-open-dialog" data-q-phone="${q.phone}">В диалог</button>
-          <button class="ghost-btn" data-action="queue-toggle-stop" data-q-id="${q.id}" data-q-phone="${q.phone}">${isPhoneInStopList(q.phone) ? "Убрать из стоп-листа" : "В стоп-лист"}</button>
-          <button class="ghost-btn" data-action="queue-remove-plan" data-q-id="${q.id}" ${state.runRuntime || !["queued", "retry"].includes(q.status) ? "disabled" : ""}>Убрать из плана</button>
+          <button class="ghost-btn" data-action="queue-open-dialog" data-q-phone="${q.phone}" ${normalizePhone(q.phone) ? "" : "disabled"}>В диалог</button>
+          <button class="ghost-btn" data-action="queue-toggle-stop" data-q-id="${q.id}" data-q-phone="${q.phone}" ${normalizePhone(q.phone) ? "" : "disabled"}>${isPhoneInStopList(q.phone) ? "Убрать из стоп-листа" : "В стоп-лист"}</button>
+          <button class="ghost-btn" data-action="queue-remove-plan" data-q-id="${q.id}" ${state.runRuntime || !["queued", "retry", "stopped"].includes(q.status) ? "disabled" : ""}>Убрать из плана</button>
         </div>
       </td>
     </tr>
@@ -5561,11 +5596,13 @@ async function syncClientsDatabase() {
 
 async function startRun() {
   if (state.runRuntime) return;
-  if (!state.clientsDb.actualized) {
+  const selectedSessionStatus = String(state.queueSession?.status || "").trim().toLowerCase();
+  const resumingStoppedSession = selectedSessionStatus === "stopped";
+  if (!resumingStoppedSession && !state.clientsDb.actualized) {
     toast("Сначала выполните «Актуализировать базу клиентов»");
     return;
   }
-  if (!hasExpectedSnapshotModeLoaded()) {
+  if (!resumingStoppedSession && !hasExpectedSnapshotModeLoaded()) {
     toast("Для LIVE-режима сначала выполните актуализацию из Rocketman");
     return;
   }
@@ -5577,8 +5614,6 @@ async function startRun() {
     toast("Сначала сформируйте плановую очередь по фильтрам");
     return;
   }
-  const selectedSessionStatus = String(state.queueSession?.status || "").trim().toLowerCase();
-  const resumingStoppedSession = selectedSessionStatus === "stopped";
   if (state.planStale && !resumingStoppedSession) {
     toast("Фильтры изменены. Обновите плановую очередь перед запуском");
     return;
@@ -6074,7 +6109,7 @@ async function addPhoneToStopList(phone, reason, source, options = {}) {
       refreshAfterStopListChange();
     }
     if (!silent && Number(queueRemoval?.removed ?? 0) > 0) {
-      addRunLog(`РР· РѕС‡РµСЂРµРґРё СѓР±СЂР°РЅРѕ pending-Р·Р°РґР°С‡: ${Number(queueRemoval?.removed ?? 0)} (stop-list ${normalized}).`);
+      addRunLog(`Из очереди удалено pending-задач: ${Number(queueRemoval?.removed ?? 0)} (stop-list ${normalized}).`);
     }
     return true;
   } catch (error) {
@@ -6193,6 +6228,15 @@ async function bulkAddSelectedClientsToStopList() {
     toast("У выбранных клиентов нет валидных телефонов");
     return;
   }
+  const alreadyInStopList = selected.filter((c) => isPhoneInStopList(c.phone)).length;
+  if (alreadyInStopList > 0) {
+    toast("Операция недоступна: среди выбранных есть клиенты, уже добавленные в стоп-лист.");
+    return;
+  }
+  if (selected.some((c) => !normalizePhone(c.phone))) {
+    toast("Операция недоступна: у части выбранных клиентов нет валидного номера телефона.");
+    return;
+  }
   try {
     const result = await fetchApiJson("/api/stop-list/bulk/add", {
       method: "POST",
@@ -6227,6 +6271,15 @@ async function bulkRemoveSelectedClientsFromStopList() {
     toast("У выбранных клиентов нет валидных телефонов");
     return;
   }
+  const inStopListCount = selected.filter((c) => isPhoneInStopList(c.phone)).length;
+  if (inStopListCount !== selected.length) {
+    toast("Операция недоступна: среди выбранных есть клиенты, которых нет в стоп-листе.");
+    return;
+  }
+  if (selected.some((c) => !normalizePhone(c.phone))) {
+    toast("Операция недоступна: у части выбранных клиентов нет валидного номера телефона.");
+    return;
+  }
   try {
     const result = await fetchApiJson("/api/stop-list/bulk/remove", {
       method: "POST",
@@ -6254,6 +6307,11 @@ function bulkReturnSelectedClientsToPlan() {
   const selected = getSelectedClientRows();
   if (selected.length === 0) {
     toast("Сначала выберите клиентов в таблице");
+    return;
+  }
+  const returnableCount = selected.filter((client) => state.excludedClientIds.has(client.id)).length;
+  if (returnableCount !== selected.length) {
+    toast("Операция недоступна: среди выбранных есть клиенты, которые уже находятся в плане.");
     return;
   }
   let changed = 0;
@@ -6285,6 +6343,15 @@ async function bulkAddSelectedQueueToStopList() {
   const phones = [...new Set(selected.map((j) => normalizePhone(j.phone)).filter(Boolean))];
   if (phones.length === 0) {
     toast("У выбранных клиентов нет валидных телефонов");
+    return;
+  }
+  const alreadyInStopList = selected.filter((q) => isPhoneInStopList(q.phone)).length;
+  if (alreadyInStopList > 0) {
+    toast("Операция недоступна: среди выбранных есть клиенты, уже добавленные в стоп-лист.");
+    return;
+  }
+  if (selected.some((q) => !normalizePhone(q.phone))) {
+    toast("Операция недоступна: у части выбранных клиентов нет валидного номера телефона.");
     return;
   }
   try {
@@ -6319,6 +6386,15 @@ async function bulkRemoveSelectedQueueFromStopList() {
   const phones = [...new Set(selected.map((j) => normalizePhone(j.phone)).filter(Boolean))];
   if (phones.length === 0) {
     toast("У выбранных клиентов нет валидных телефонов");
+    return;
+  }
+  const inStopListCount = selected.filter((q) => isPhoneInStopList(q.phone)).length;
+  if (inStopListCount !== selected.length) {
+    toast("Операция недоступна: среди выбранных есть клиенты, которых нет в стоп-листе.");
+    return;
+  }
+  if (selected.some((q) => !normalizePhone(q.phone))) {
+    toast("Операция недоступна: у части выбранных клиентов нет валидного номера телефона.");
     return;
   }
   try {
@@ -6520,6 +6596,10 @@ async function bulkFetchDebtByRows(rows, options = {}) {
 
   const externalIds = collectExternalClientIds(rows);
   const missingExternalIdCount = rows.filter((row) => String(row?.externalClientId || "").trim() === "").length;
+  if (missingExternalIdCount > 0) {
+    toast("Операция недоступна: у части выбранных клиентов нет externalClientId. Оставьте только клиентов, для которых действие применимо.");
+    return;
+  }
   if (externalIds.length === 0) {
     toast(emptyExternalIdMessage || "У выбранных клиентов отсутствует externalClientId");
     return;
@@ -6547,14 +6627,11 @@ async function bulkFetchDebtByRows(rows, options = {}) {
     renderClientsDb();
     renderQueue();
 
-    const missingSuffix = missingExternalIdCount > 0
-      ? `, без externalClientId: ${missingExternalIdCount}`
-      : "";
     if (failed === 0) {
-      toast(`Сумма долга обновлена для ${success} клиентов${missingSuffix}`);
+      toast(`Сумма долга обновлена для ${success} клиентов`);
       return;
     }
-    toast(`Сумма долга обновлена для ${success} клиентов, ошибок: ${failed}${missingSuffix}`);
+    toast(`Сумма долга обновлена для ${success} клиентов, ошибок: ${failed}`);
   } finally {
     state.bulkDebtInProgress = false;
     renderClientsBulkUi();
@@ -6582,18 +6659,13 @@ async function bulkRemoveSelectedFromPlan() {
     toast("Сначала выберите клиентов в очереди");
     return;
   }
-  const removableIds = selected
-    .filter((q) => ["queued", "retry", "stopped"].includes(q.status))
-    .map((q) => q.id);
-  const removableJobIds = new Set(
-    selected
-      .filter((q) => ["queued", "retry", "stopped"].includes(q.status))
-      .map((q) => q.id)
-  );
-  if (removableIds.length === 0) {
-    toast("Среди выбранных нет задач, доступных для удаления из плана");
+  const removableStatuses = new Set(["queued", "retry", "stopped"]);
+  const allRemovable = selected.every((q) => removableStatuses.has(q.status));
+  if (!allRemovable) {
+    toast("Операция недоступна: среди выбранных есть задачи, которые нельзя удалить из плана.");
     return;
   }
+  const removableJobIds = new Set(selected.map((q) => q.id));
   const result = await removeQueueJobsFromPlan(Array.from(removableJobIds), { silent: true });
   if (!result) return;
   state.selectedQueue.clear();
@@ -6624,14 +6696,17 @@ async function bulkAssignTemplateToQueue() {
     toast("Выбранный шаблон не найден");
     return;
   }
-  const removableJobIds = selected
-    .filter((q) => ["queued", "retry"].includes(q.status))
-    .filter((q) => canApplyTemplateToOverdue(template, q.daysOverdue))
-    .map((q) => q.id);
-  if (removableJobIds.length === 0) {
-    toast(`Шаблон «${templateDisplayName(template)}» не подходит выбранным клиентам по правилу просрочки или статусу`);
+  const hasInvalidStatus = selected.some((q) => !["queued", "retry"].includes(q.status));
+  if (hasInvalidStatus) {
+    toast("Операция недоступна: шаблон можно массово назначать только задачам со статусом «В очереди» или «Повтор».");
     return;
   }
+  const hasOverdueMismatch = selected.some((q) => !canApplyTemplateToOverdue(template, q.daysOverdue));
+  if (hasOverdueMismatch) {
+    toast(`Операция недоступна: шаблон «${templateDisplayName(template)}» не подходит части выбранных клиентов по правилу просрочки.`);
+    return;
+  }
+  const removableJobIds = selected.map((q) => q.id);
   try {
     const payload = { jobIds: removableJobIds, templateId };
     if (state.queueSessionId) {
@@ -6776,6 +6851,10 @@ function bindEvents() {
     },
     "client-toggle-stop": async (btn) => {
       const phone = btn.dataset.clientPhone || "";
+      if (!normalizePhone(phone)) {
+        toast("Операция недоступна: у клиента нет валидного номера телефона.");
+        return;
+      }
       if (isPhoneInStopList(phone)) {
         const ok = await removePhoneFromStopList(phone);
         if (!ok) return;
@@ -6820,6 +6899,10 @@ function bindEvents() {
     },
     "queue-toggle-stop": async (btn) => {
       const phone = btn.dataset.qPhone || "";
+      if (!normalizePhone(phone)) {
+        toast("Операция недоступна: у клиента нет валидного номера телефона.");
+        return;
+      }
       if (isPhoneInStopList(phone)) {
         const ok = await removePhoneFromStopList(phone);
         if (!ok) return;
@@ -7302,6 +7385,9 @@ function bindEvents() {
   });
   $("queueBulkRemovePlan").addEventListener("click", () => {
     void bulkRemoveSelectedFromPlan();
+  });
+  $("queueBulkTemplate").addEventListener("change", () => {
+    renderQueueBulkUi();
   });
   $("queueBulkSetTemplate").addEventListener("click", bulkAssignTemplateToQueue);
 

@@ -62,7 +62,7 @@ public sealed class DialogService(SettingsStore settingsStore, AlertService aler
                 snapshotMatchedPhones.Contains(x.ClientPhone));
         }
 
-        var grouped = await baseQuery
+        var groupedQuery = baseQuery
             .GroupBy(x => x.ClientPhone)
             .Select(g => new
             {
@@ -70,15 +70,15 @@ public sealed class DialogService(SettingsStore settingsStore, AlertService aler
                 LastMessageAtUtc = g.Max(x => x.CreatedAtUtc),
                 TotalMessages = g.Count(),
                 HasIncoming = g.Any(x => x.Direction == "in")
-            })
-            .OrderByDescending(x => x.LastMessageAtUtc)
-            .ToListAsync(cancellationToken);
+            });
 
-        var totalDialogs = grouped.Count;
-        var page = grouped
+        var totalDialogs = await groupedQuery.CountAsync(cancellationToken);
+        var page = await groupedQuery
+            .OrderByDescending(x => x.LastMessageAtUtc)
+            .ThenByDescending(x => x.Phone)
             .Skip(offset)
             .Take(limit)
-            .ToList();
+            .ToListAsync(cancellationToken);
 
         if (page.Count == 0)
         {

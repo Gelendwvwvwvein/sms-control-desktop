@@ -249,6 +249,15 @@ p {
   border-left-color: #2f9b6a;
 }
 
+.queue-footnote {
+  margin-top: var(--space-2);
+}
+
+.queue-footnote::before {
+  content: "Подсказка: ";
+  font-weight: 700;
+}
+
 #tplTypeRule {
   margin-bottom: var(--space-3);
 }
