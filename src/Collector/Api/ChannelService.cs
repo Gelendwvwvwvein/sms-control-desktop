@@ -592,9 +592,7 @@ public sealed class ChannelService(HttpClient httpClient, AlertService alerts, R
 
     private static string NormalizePhone(string phone)
     {
-        if (string.IsNullOrWhiteSpace(phone)) return string.Empty;
-        var digits = new string(phone.Where(char.IsDigit).ToArray());
-        return string.IsNullOrWhiteSpace(digits) ? string.Empty : $"+{digits}";
+        return PhoneNormalizer.Normalize(phone);
     }
 
     private static string NormalizeStatus(string status)

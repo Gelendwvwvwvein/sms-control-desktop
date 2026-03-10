@@ -62,6 +62,10 @@ public sealed class TraccarHttpSmsSender
                 ResponseBody = body
             };
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             return new TraccarSmsSendResult

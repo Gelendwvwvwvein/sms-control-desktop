@@ -331,6 +331,17 @@ public sealed class DialogService(SettingsStore settingsStore, AlertService aler
             };
         }
 
+        if (await IsPhoneInActiveStopListAsync(db, normalizedPhone, cancellationToken))
+        {
+            return new DialogManualSendResultDto
+            {
+                Success = false,
+                Code = "STOP_LIST_BLOCKED",
+                Message = "Ручная отправка запрещена: номер находится в стоп-листе.",
+                Phone = normalizedPhone
+            };
+        }
+
         var settings = await settingsStore.GetAsync(db, cancellationToken);
         var timezoneOffset = payload.TimezoneOffset ?? await ResolveClientTimezoneOffsetAsync(db, normalizedPhone, cancellationToken);
         if (!timezoneOffset.HasValue)
@@ -393,9 +404,9 @@ public sealed class DialogService(SettingsStore settingsStore, AlertService aler
         {
             RunJobId = null,
             ClientPhone = normalizedPhone,
-            Direction = "out",
+            Direction = MessageDirections.Out,
             Text = text,
-            GatewayStatus = sendResult.Success ? "sent" : "failed",
+            GatewayStatus = sendResult.Success ? MessageGatewayStatuses.Sent : MessageGatewayStatuses.Failed,
             CreatedAtUtc = nowUtc,
             MetaJson = JsonSerializer.Serialize(new
             {
@@ -822,6 +833,21 @@ public sealed class DialogService(SettingsStore settingsStore, AlertService aler
         return online ?? channels[0];
     }
 
+    private static Task<bool> IsPhoneInActiveStopListAsync(
+        AppDbContext db,
+        string normalizedPhone,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedPhone))
+        {
+            return Task.FromResult(false);
+        }
+
+        return db.StopList
+            .AsNoTracking()
+            .AnyAsync(x => x.IsActive && x.Phone == normalizedPhone, cancellationToken);
+    }
+
     private async Task<int?> ResolveClientTimezoneOffsetAsync(
         AppDbContext db,
         string normalizedPhone,
@@ -910,22 +936,11 @@ public sealed class DialogService(SettingsStore settingsStore, AlertService aler
 
     private static string NormalizePhone(string rawPhone)
     {
-        var digits = new string((rawPhone ?? string.Empty).Where(char.IsDigit).ToArray());
-        if (digits.Length == 10)
-        {
-            digits = $"7{digits}";
-        }
-        else if (digits.Length == 11 && digits.StartsWith("8", StringComparison.Ordinal))
-        {
-            digits = $"7{digits[1..]}";
-        }
-
-        if (digits.Length < 10 || digits.Length > 15)
-        {
-            return string.Empty;
-        }
-
-        return $"+{digits}";
+        return PhoneNormalizer.Normalize(
+            rawPhone,
+            minDigits: 10,
+            maxDigits: 15,
+            coerceRussianLocalNumbers: true);
     }
 
     private static string BuildDialogId(string normalizedPhone)

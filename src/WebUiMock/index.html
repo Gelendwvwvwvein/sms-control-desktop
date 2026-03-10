@@ -449,9 +449,6 @@
         <article class="card">
           <h3>Плановая/текущая очередь отправок</h3>
           <div class="filters">
-            <label>Поиск
-              <input id="queueSearch" placeholder="ФИО, телефон или № договора">
-            </label>
             <label>Статус
               <select id="queueFilterStatus">
                 <option value="all">Все</option>
@@ -490,6 +487,9 @@
           </div>
           <p class="ui-notice ui-notice-info footnote-note" id="queueRetryHint">Переотправляются задачи со статусами «Ошибка» и «Остановлено».</p>
           <div class="actions bulk-toolbar table-actions-sticky">
+            <label class="toolbar-field queue-toolbar-search">Поиск
+              <input id="queueSearch" placeholder="ФИО, телефон или № договора">
+            </label>
             <span class="bulk-meta" id="queueBulkMeta">Выбрано: 0</span>
             <button class="ghost-btn" id="queueSelectVisible">Выбрать все</button>
             <button class="ghost-btn" id="queueClearSelection">Снять выбор</button>
@@ -648,6 +648,10 @@
     })();
   </script>
   <script src="./uikit.js?v=20260309e"></script>
+  <script src="./app.shared.js?v=20260309e"></script>
+  <script src="./app.helpers.js?v=20260309e"></script>
+  <script src="./app.actions.js?v=20260309e"></script>
+  <script src="./app.render.js?v=20260309e"></script>
   <script src="./app.js?v=20260309e"></script>
 </body>
 </html>

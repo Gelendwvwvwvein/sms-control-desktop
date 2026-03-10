@@ -6,20 +6,11 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Collector.Api;
 
-public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentService, SettingsStore settingsStore)
+public sealed class DebtCacheService(
+    RocketmanCommentService rocketmanCommentService,
+    SettingsStore settingsStore,
+    QueueService queueService)
 {
-    private const string DebtStatusEmpty = "empty";
-    private const string DebtStatusReady = "ready";
-    private const string DebtStatusError = "error";
-
-    private const string DebtSourceSnapshot = "snapshot";
-    private const string DebtSourceLiveFetch = "live_fetch";
-
-    private const string JobStatusQueued = "queued";
-    private const string JobStatusRetry = "retry";
-    private const string JobStatusRunning = "running";
-    private const string JobStatusStopped = "stopped";
-
     public static ApiErrorDto? ValidateExternalClientId(string? externalClientId)
     {
         if (string.IsNullOrWhiteSpace(externalClientId))
@@ -202,8 +193,8 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
             ExactTotalRaw = exactRaw,
             ApproxTotalText = approxText,
             ApproxTotalValue = approxValue,
-            Status = DebtStatusReady,
-            Source = DebtSourceLiveFetch,
+            Status = DebtStatuses.Ready,
+            Source = DebtSources.LiveFetch,
             LastFetchedAtUtc = nowUtc,
             CreatedAtUtc = nowUtc,
             UpdatedAtUtc = nowUtc
@@ -214,8 +205,8 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
         target.ExactTotalRaw = exactRaw;
         target.ApproxTotalText = approxText;
         target.ApproxTotalValue = approxValue;
-        target.Status = DebtStatusReady;
-        target.Source = DebtSourceLiveFetch;
+        target.Status = DebtStatuses.Ready;
+        target.Source = DebtSources.LiveFetch;
         target.LastFetchedAtUtc = nowUtc;
         target.UpdatedAtUtc = nowUtc;
         target.LastErrorCode = null;
@@ -238,6 +229,12 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
         }
 
         await UpdatePendingRunJobsPayloadTotalAsync(db, normalizedExternalClientId, exactRaw, cancellationToken);
+        await queueService.RebuildPersistedPreviewsForExternalClientIdAsync(
+            db,
+            normalizedExternalClientId,
+            settings,
+            cancellationToken,
+            saveChanges: false);
         await db.SaveChangesAsync(cancellationToken);
 
         return new ClientDebtFetchResultDto
@@ -287,16 +284,16 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
             CardUrl = FirstNonEmpty(row?.CardUrl, string.Empty),
             ExactTotalRaw = string.Empty,
             ApproxTotalText = string.Empty,
-            Status = DebtStatusError,
-            Source = DebtSourceLiveFetch,
+            Status = DebtStatuses.Error,
+            Source = DebtSources.LiveFetch,
             CreatedAtUtc = nowUtc,
             UpdatedAtUtc = nowUtc
         };
 
         target.Phone = NormalizePhone(FirstNonEmpty(row?.Phone, target.Phone));
         target.CardUrl = FirstNonEmpty(row?.CardUrl, target.CardUrl);
-        target.Status = DebtStatusError;
-        target.Source = DebtSourceLiveFetch;
+        target.Status = DebtStatuses.Error;
+        target.Source = DebtSources.LiveFetch;
         target.UpdatedAtUtc = nowUtc;
         target.LastErrorCode = code;
         target.LastErrorDetail = detail;
@@ -323,10 +320,10 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
         var jobs = await db.RunJobs
             .Where(x => x.ExternalClientId == externalClientId)
             .Where(x =>
-                x.Status == JobStatusQueued ||
-                x.Status == JobStatusRetry ||
-                x.Status == JobStatusRunning ||
-                x.Status == JobStatusStopped)
+                x.Status == RunJobStatuses.Queued ||
+                x.Status == RunJobStatuses.Retry ||
+                x.Status == RunJobStatuses.Running ||
+                x.Status == RunJobStatuses.Stopped)
             .ToListAsync(cancellationToken);
 
         if (jobs.Count == 0)
@@ -336,7 +333,7 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
 
         foreach (var job in jobs)
         {
-            job.PayloadJson = UpsertPayloadField(job.PayloadJson, "totalWithCommissionRaw", exactRaw);
+            job.PayloadJson = UpsertPayloadField(job.PayloadJson, PayloadFields.TotalWithCommissionRaw, exactRaw);
         }
 
         db.RunJobs.UpdateRange(jobs);
@@ -370,8 +367,8 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
             : FirstNonEmpty(cache?.ApproxTotalText, string.Empty);
         var approxValue = ParseApproxValue(approxText);
 
-        var status = FirstNonEmpty(cache?.Status, string.IsNullOrWhiteSpace(exactRaw) ? DebtStatusEmpty : DebtStatusReady);
-        var source = FirstNonEmpty(cache?.Source, string.IsNullOrWhiteSpace(exactRaw) ? string.Empty : DebtSourceSnapshot);
+        var status = FirstNonEmpty(cache?.Status, string.IsNullOrWhiteSpace(exactRaw) ? DebtStatuses.Empty : DebtStatuses.Ready);
+        var source = FirstNonEmpty(cache?.Source, string.IsNullOrWhiteSpace(exactRaw) ? string.Empty : DebtSources.Snapshot);
 
         return new ClientDebtStateDto
         {
@@ -428,22 +425,7 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
 
     private static string NormalizePhone(string? rawPhone)
     {
-        var digits = new string((rawPhone ?? string.Empty).Where(char.IsDigit).ToArray());
-        if (digits.Length == 10)
-        {
-            digits = $"7{digits}";
-        }
-        else if (digits.Length == 11 && digits.StartsWith("8", StringComparison.Ordinal))
-        {
-            digits = $"7{digits[1..]}";
-        }
-
-        if (digits.Length == 0)
-        {
-            return string.Empty;
-        }
-
-        return $"+{digits}";
+        return PhoneNormalizer.Normalize(rawPhone, coerceRussianLocalNumbers: true);
     }
 
     private static string NormalizeDebtText(string? raw)

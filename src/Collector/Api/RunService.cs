@@ -1,26 +1,17 @@
 using System.Text.Json;
 using Collector.Data;
 using Collector.Data.Entities;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using System.Globalization;
 
 namespace Collector.Api;
 
-public sealed class RunService(SettingsStore settingsStore)
+public sealed class RunService(
+    SettingsStore settingsStore,
+    RunLifecycleCoordinator lifecycleCoordinator,
+    RunCancellationCoordinator runCancellationCoordinator)
 {
-    private const string SnapshotModeLive = "live";
-    private const string SessionStatusPlanned = "planned";
-    private const string SessionStatusRunning = "running";
-    private const string SessionStatusStopped = "stopped";
-
-    private const string JobStatusQueued = "queued";
-    private const string JobStatusRunning = "running";
-    private const string JobStatusRetry = "retry";
-    private const string JobStatusStopped = "stopped";
-    private const string JobStatusSent = "sent";
-    private const string JobStatusFailed = "failed";
-    private const string JobErrorStoppedByOperator = "RUN_STOPPED_BY_OPERATOR";
-
     public async Task<RunStatusDto> GetStatusAsync(
         AppDbContext db,
         long? runSessionId,
@@ -34,7 +25,7 @@ public sealed class RunService(SettingsStore settingsStore)
 
         var runningSession = await db.RunSessions
             .AsNoTracking()
-            .Where(x => x.Status == SessionStatusRunning)
+            .Where(x => x.Status == RunSessionStatuses.Running)
             .OrderByDescending(x => x.Id)
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -93,64 +84,113 @@ public sealed class RunService(SettingsStore settingsStore)
         RunStartRequestDto payload,
         CancellationToken cancellationToken)
     {
-        var request = payload ?? new RunStartRequestDto();
-        var now = DateTime.UtcNow;
-        var current = await GetStatusAsync(db, request.RunSessionId, cancellationToken);
-        if (!current.CanStart)
+        await lifecycleCoordinator.WaitAsync(cancellationToken);
+        try
         {
-            throw BuildStartBlockedException(current.StartBlockCode, current.StartBlockMessage);
+            var request = payload ?? new RunStartRequestDto();
+            var now = DateTime.UtcNow;
+            var current = await GetStatusAsync(db, request.RunSessionId, cancellationToken);
+            if (!current.CanStart)
+            {
+                throw BuildStartBlockedException(current.StartBlockCode, current.StartBlockMessage);
+            }
+
+            var sessionId = request.RunSessionId ?? current.Session.Id;
+            var session = await db.RunSessions.FirstOrDefaultAsync(x => x.Id == sessionId, cancellationToken);
+            if (session is null)
+            {
+                throw new RunStateException(
+                    "RUN_SESSION_NOT_FOUND",
+                    $"Сессия запуска с id={sessionId} не найдена.",
+                    404);
+            }
+
+            if (!string.Equals(session.Status, RunSessionStatuses.Planned, StringComparison.Ordinal) &&
+                !string.Equals(session.Status, RunSessionStatuses.Stopped, StringComparison.Ordinal))
+            {
+                throw BuildStartBlockedException(
+                    "RUN_START_STATE_INVALID",
+                    $"Сессию со статусом \"{session.Status}\" нельзя запустить. Допустимо: \"planned\" или \"stopped\".");
+            }
+
+            var anotherRunningSessionId = await db.RunSessions
+                .AsNoTracking()
+                .Where(x => x.Id != session.Id && x.Status == RunSessionStatuses.Running)
+                .OrderByDescending(x => x.Id)
+                .Select(x => (long?)x.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (anotherRunningSessionId.HasValue && anotherRunningSessionId.Value > 0)
+            {
+                throw BuildStartBlockedException(
+                    "RUN_ALREADY_RUNNING",
+                    $"Уже есть активная сессия #{anotherRunningSessionId.Value} в состоянии \"running\".");
+            }
+
+            var hasJobs = await db.RunJobs
+                .AsNoTracking()
+                .AnyAsync(x => x.RunSessionId == session.Id, cancellationToken);
+            if (!hasJobs)
+            {
+                throw BuildStartBlockedException(
+                    "RUN_QUEUE_EMPTY",
+                    "Сессия не содержит задач для отправки.");
+            }
+
+            var settings = await settingsStore.GetAsync(db, cancellationToken);
+            if (!TryParseWorkWindowStrict(settings.WorkWindowStart, settings.WorkWindowEnd, out _, out _))
+            {
+                throw new RunStateException(
+                    "RUN_WORK_WINDOW_INVALID",
+                    "Некорректно задано рабочее окно в настройках. Укажите формат HH:mm и убедитесь, что конец больше начала.",
+                    409);
+            }
+
+            var wasStopped = string.Equals(session.Status, RunSessionStatuses.Stopped, StringComparison.Ordinal);
+            runCancellationCoordinator.ResetSession(session.Id);
+            session.Status = RunSessionStatuses.Running;
+            session.StartedAtUtc = now;
+            session.FinishedAtUtc = null;
+            session.Notes = "Запуск активен.";
+
+            if (wasStopped)
+            {
+                await RestoreStoppedJobsToQueueAsync(db, session.Id, cancellationToken);
+            }
+
+            await RebasePendingJobsToStartMomentAsync(db, session.Id, now, settings, cancellationToken);
+
+            db.RunSessions.Update(session);
+            AddRunEvent(
+                db,
+                runSessionId: session.Id,
+                eventType: "run_started",
+                severity: "info",
+                message: $"Запуск сессии #{session.Id}.",
+                payload: new { sessionId = session.Id });
+
+            try
+            {
+                await db.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateException ex) when (IsSingleRunningSessionConstraintViolation(ex))
+            {
+                throw BuildStartBlockedException(
+                    "RUN_ALREADY_RUNNING",
+                    "Параллельный запуск отклонён: другая сессия уже успела перейти в состояние \"running\".");
+            }
+
+            return new RunCommandResultDto
+            {
+                Action = "start",
+                Message = $"Сессия #{session.Id} переведена в состояние \"running\".",
+                ChangedAtUtc = now,
+                Status = await GetStatusAsync(db, session.Id, cancellationToken)
+            };
         }
-
-        var sessionId = request.RunSessionId ?? current.Session.Id;
-        var session = await db.RunSessions.FirstOrDefaultAsync(x => x.Id == sessionId, cancellationToken);
-        if (session is null)
+        finally
         {
-            throw new RunStateException(
-                "RUN_SESSION_NOT_FOUND",
-                $"Сессия запуска с id={sessionId} не найдена.",
-                404);
+            lifecycleCoordinator.Release();
         }
-
-        var settings = await settingsStore.GetAsync(db, cancellationToken);
-        if (!TryParseWorkWindowStrict(settings.WorkWindowStart, settings.WorkWindowEnd, out _, out _))
-        {
-            throw new RunStateException(
-                "RUN_WORK_WINDOW_INVALID",
-                "Некорректно задано рабочее окно в настройках. Укажите формат HH:mm и убедитесь, что конец больше начала.",
-                409);
-        }
-
-        var wasStopped = string.Equals(session.Status, SessionStatusStopped, StringComparison.Ordinal);
-        session.Status = SessionStatusRunning;
-        session.StartedAtUtc = now;
-        session.FinishedAtUtc = null;
-        session.Notes = "Запуск активен.";
-
-        if (wasStopped)
-        {
-            await RestoreStoppedJobsToQueueAsync(db, session.Id, cancellationToken);
-        }
-
-        await RebasePendingJobsToStartMomentAsync(db, session.Id, now, settings, cancellationToken);
-
-        db.RunSessions.Update(session);
-        AddRunEvent(
-            db,
-            runSessionId: session.Id,
-            eventType: "run_started",
-            severity: "info",
-            message: $"Запуск сессии #{session.Id}.",
-            payload: new { sessionId = session.Id });
-
-        await db.SaveChangesAsync(cancellationToken);
-
-        return new RunCommandResultDto
-        {
-            Action = "start",
-            Message = $"Сессия #{session.Id} переведена в состояние \"running\".",
-            ChangedAtUtc = now,
-            Status = await GetStatusAsync(db, session.Id, cancellationToken)
-        };
     }
 
     public async Task<RunCommandResultDto> StopAsync(
@@ -158,94 +198,111 @@ public sealed class RunService(SettingsStore settingsStore)
         RunStopRequestDto payload,
         CancellationToken cancellationToken)
     {
-        var request = payload ?? new RunStopRequestDto();
-        var now = DateTime.UtcNow;
-
-        RunSessionRecord? session;
-        if (request.RunSessionId.HasValue && request.RunSessionId.Value > 0)
+        await lifecycleCoordinator.WaitAsync(cancellationToken);
+        try
         {
-            session = await db.RunSessions.FirstOrDefaultAsync(x => x.Id == request.RunSessionId.Value, cancellationToken);
-            if (session is null)
+            var request = payload ?? new RunStopRequestDto();
+            var now = DateTime.UtcNow;
+
+            RunSessionRecord? session;
+            if (request.RunSessionId.HasValue && request.RunSessionId.Value > 0)
             {
-                throw new RunStateException(
-                    "RUN_SESSION_NOT_FOUND",
-                    $"Сессия запуска с id={request.RunSessionId.Value} не найдена.",
-                    404);
+                session = await db.RunSessions.FirstOrDefaultAsync(x => x.Id == request.RunSessionId.Value, cancellationToken);
+                if (session is null)
+                {
+                    throw new RunStateException(
+                        "RUN_SESSION_NOT_FOUND",
+                        $"Сессия запуска с id={request.RunSessionId.Value} не найдена.",
+                        404);
+                }
             }
-        }
-        else
-        {
-            session = await db.RunSessions
-                .OrderByDescending(x => x.Id)
-                .FirstOrDefaultAsync(x => x.Status == SessionStatusRunning, cancellationToken);
+            else
+            {
+                session = await db.RunSessions
+                    .OrderByDescending(x => x.Id)
+                    .FirstOrDefaultAsync(x => x.Status == RunSessionStatuses.Running, cancellationToken);
 
-            if (session is null)
+                if (session is null)
+                {
+                    throw new RunStateException(
+                        "RUN_NOT_RUNNING",
+                        "Нет активной сессии в состоянии \"running\". Останавливать нечего.",
+                        409);
+                }
+            }
+
+            if (!string.Equals(session.Status, RunSessionStatuses.Running, StringComparison.Ordinal))
             {
                 throw new RunStateException(
                     "RUN_NOT_RUNNING",
-                    "Нет активной сессии в состоянии \"running\". Останавливать нечего.",
+                    $"Сессия #{session.Id} имеет статус \"{session.Status}\". Остановка доступна только для \"running\".",
                     409);
             }
-        }
 
-        if (!string.Equals(session.Status, SessionStatusRunning, StringComparison.Ordinal))
-        {
-            throw new RunStateException(
-                "RUN_NOT_RUNNING",
-                $"Сессия #{session.Id} имеет статус \"{session.Status}\". Остановка доступна только для \"running\".",
-                409);
-        }
+            session.Status = RunSessionStatuses.Stopped;
+            session.FinishedAtUtc = now;
+            var normalizedReason = NormalizeReason(request.Reason);
+            session.Notes = !string.IsNullOrEmpty(normalizedReason)
+                ? $"Остановлено оператором: {normalizedReason}"
+                : "Остановлено оператором.";
 
-        session.Status = SessionStatusStopped;
-        session.FinishedAtUtc = now;
-        var normalizedReason = NormalizeReason(request.Reason);
-        session.Notes = !string.IsNullOrEmpty(normalizedReason)
-            ? $"Остановлено оператором: {normalizedReason}"
-            : "Остановлено оператором.";
+            var stopDetail = !string.IsNullOrEmpty(normalizedReason)
+                ? $"Остановлено оператором: {normalizedReason}"
+                : "Остановлено оператором.";
+            var pendingJobs = await db.RunJobs
+                .Where(x => x.RunSessionId == session.Id)
+                .Where(x => x.Status == RunJobStatuses.Queued || x.Status == RunJobStatuses.Retry)
+                .ToListAsync(cancellationToken);
 
-        var stopDetail = !string.IsNullOrEmpty(normalizedReason)
-            ? $"Остановлено оператором: {normalizedReason}"
-            : "Остановлено оператором.";
-        var pendingJobs = await db.RunJobs
-            .Where(x => x.RunSessionId == session.Id)
-            .Where(x => x.Status == JobStatusQueued || x.Status == JobStatusRetry)
-            .ToListAsync(cancellationToken);
-
-        foreach (var job in pendingJobs)
-        {
-            job.Status = JobStatusStopped;
-            job.LastErrorCode = JobErrorStoppedByOperator;
-            job.LastErrorDetail = stopDetail;
-        }
-
-        if (pendingJobs.Count > 0)
-        {
-            db.RunJobs.UpdateRange(pendingJobs);
-        }
-
-        db.RunSessions.Update(session);
-        AddRunEvent(
-            db,
-            runSessionId: session.Id,
-            eventType: "run_stopped",
-            severity: "warning",
-            message: $"Остановка сессии #{session.Id}.",
-            payload: new
+            foreach (var job in pendingJobs)
             {
-                sessionId = session.Id,
-                reason = normalizedReason,
-                stoppedJobs = pendingJobs.Count
-            });
+                job.Status = RunJobStatuses.Stopped;
+                job.LastErrorCode = RunJobErrorCodes.StoppedByOperator;
+                job.LastErrorDetail = stopDetail;
+            }
 
-        await db.SaveChangesAsync(cancellationToken);
+            if (pendingJobs.Count > 0)
+            {
+                db.RunJobs.UpdateRange(pendingJobs);
+            }
 
-        return new RunCommandResultDto
+            runCancellationCoordinator.CancelSession(session.Id);
+            db.RunSessions.Update(session);
+            AddRunEvent(
+                db,
+                runSessionId: session.Id,
+                eventType: "run_stopped",
+                severity: "warning",
+                message: $"Остановка сессии #{session.Id}.",
+                payload: new
+                {
+                    sessionId = session.Id,
+                    reason = normalizedReason,
+                    stoppedJobs = pendingJobs.Count
+                });
+
+            try
+            {
+                await db.SaveChangesAsync(cancellationToken);
+            }
+            catch
+            {
+                runCancellationCoordinator.ResetSession(session.Id);
+                throw;
+            }
+
+            return new RunCommandResultDto
+            {
+                Action = "stop",
+                Message = $"Сессия #{session.Id} переведена в состояние \"stopped\".",
+                ChangedAtUtc = now,
+                Status = await GetStatusAsync(db, session.Id, cancellationToken)
+            };
+        }
+        finally
         {
-            Action = "stop",
-            Message = $"Сессия #{session.Id} переведена в состояние \"stopped\".",
-            ChangedAtUtc = now,
-            Status = await GetStatusAsync(db, session.Id, cancellationToken)
-        };
+            lifecycleCoordinator.Release();
+        }
     }
 
     public static ApiErrorDto? ValidateStartRequest(RunStartRequestDto? payload)
@@ -396,12 +453,12 @@ public sealed class RunService(SettingsStore settingsStore)
             SnapshotId = session.SnapshotId,
             Notes = session.Notes ?? string.Empty,
             TotalJobs = totalJobs,
-            QueuedJobs = ReadCount(byStatus, JobStatusQueued),
-            RunningJobs = ReadCount(byStatus, JobStatusRunning),
-            RetryJobs = ReadCount(byStatus, JobStatusRetry),
-            StoppedJobs = ReadCount(byStatus, JobStatusStopped),
-            SentJobs = ReadCount(byStatus, JobStatusSent),
-            FailedJobs = ReadCount(byStatus, JobStatusFailed)
+            QueuedJobs = ReadCount(byStatus, RunJobStatuses.Queued),
+            RunningJobs = ReadCount(byStatus, RunJobStatuses.Running),
+            RetryJobs = ReadCount(byStatus, RunJobStatuses.Retry),
+            StoppedJobs = ReadCount(byStatus, RunJobStatuses.Stopped),
+            SentJobs = ReadCount(byStatus, RunJobStatuses.Sent),
+            FailedJobs = ReadCount(byStatus, RunJobStatuses.Failed)
         };
     }
 
@@ -413,7 +470,7 @@ public sealed class RunService(SettingsStore settingsStore)
 
         var runningSessionId = await db.RunSessions
             .AsNoTracking()
-            .Where(x => x.Status == SessionStatusRunning)
+            .Where(x => x.Status == RunSessionStatuses.Running)
             .OrderByDescending(x => x.Id)
             .Select(x => (long?)x.Id)
             .FirstOrDefaultAsync(cancellationToken);
@@ -424,7 +481,7 @@ public sealed class RunService(SettingsStore settingsStore)
 
         var latestPlannedSessionId = await db.RunSessions
             .AsNoTracking()
-            .Where(x => x.Status == SessionStatusPlanned)
+            .Where(x => x.Status == RunSessionStatuses.Planned)
             .OrderByDescending(x => x.Id)
             .Select(x => (long?)x.Id)
             .FirstOrDefaultAsync(cancellationToken);
@@ -442,7 +499,7 @@ public sealed class RunService(SettingsStore settingsStore)
         bool allowLiveDispatch)
     {
         var isStoppedSession = session is not null &&
-                               string.Equals(session.Status, SessionStatusStopped, StringComparison.Ordinal);
+                               string.Equals(session.Status, RunSessionStatuses.Stopped, StringComparison.Ordinal);
 
         if (status.HasRunningSession)
         {
@@ -458,8 +515,8 @@ public sealed class RunService(SettingsStore settingsStore)
                 "Нет сформированной очереди. Сначала выполните /api/queue/build.");
         }
 
-        if (!string.Equals(session.Status, SessionStatusPlanned, StringComparison.Ordinal) &&
-            !string.Equals(session.Status, SessionStatusStopped, StringComparison.Ordinal))
+        if (!string.Equals(session.Status, RunSessionStatuses.Planned, StringComparison.Ordinal) &&
+            !string.Equals(session.Status, RunSessionStatuses.Stopped, StringComparison.Ordinal))
         {
             return (
                 "RUN_START_STATE_INVALID",
@@ -474,7 +531,7 @@ public sealed class RunService(SettingsStore settingsStore)
         }
 
         if (!allowLiveDispatch &&
-            string.Equals(session.Mode, SnapshotModeLive, StringComparison.OrdinalIgnoreCase))
+            string.Equals(session.Mode, SnapshotModes.Live, StringComparison.OrdinalIgnoreCase))
         {
             return (
                 "RUN_LIVE_DISPATCH_BLOCKED",
@@ -536,7 +593,7 @@ public sealed class RunService(SettingsStore settingsStore)
     {
         var pending = await db.RunJobs
             .Where(x => x.RunSessionId == runSessionId &&
-                        (x.Status == JobStatusQueued || x.Status == JobStatusRetry))
+                        (x.Status == RunJobStatuses.Queued || x.Status == RunJobStatuses.Retry))
             .OrderBy(x => x.PlannedAtUtc)
             .ThenBy(x => x.Id)
             .ToListAsync(cancellationToken);
@@ -667,7 +724,7 @@ public sealed class RunService(SettingsStore settingsStore)
     {
         var stoppedJobs = await db.RunJobs
             .Where(x => x.RunSessionId == runSessionId &&
-                        (x.Status == JobStatusStopped || x.Status == JobStatusRunning))
+                        (x.Status == RunJobStatuses.Stopped || x.Status == RunJobStatuses.Running))
             .ToListAsync(cancellationToken);
         if (stoppedJobs.Count == 0)
         {
@@ -676,8 +733,8 @@ public sealed class RunService(SettingsStore settingsStore)
 
         foreach (var job in stoppedJobs)
         {
-            job.Status = JobStatusQueued;
-            if (string.Equals(job.LastErrorCode, JobErrorStoppedByOperator, StringComparison.Ordinal))
+            job.Status = RunJobStatuses.Queued;
+            if (string.Equals(job.LastErrorCode, RunJobErrorCodes.StoppedByOperator, StringComparison.Ordinal))
             {
                 job.LastErrorCode = null;
                 job.LastErrorDetail = null;
@@ -685,7 +742,17 @@ public sealed class RunService(SettingsStore settingsStore)
         }
 
         db.RunJobs.UpdateRange(stoppedJobs);
-        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private static bool IsSingleRunningSessionConstraintViolation(DbUpdateException ex)
+    {
+        if (ex.InnerException is not SqliteException sqliteEx || sqliteEx.SqliteErrorCode != 19)
+        {
+            return false;
+        }
+
+        return sqliteEx.Message.Contains("IX_run_sessions_single_running", StringComparison.OrdinalIgnoreCase) ||
+               sqliteEx.Message.Contains("run_sessions.status", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string NormalizeReason(string? reason)

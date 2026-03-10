@@ -3,7 +3,7 @@ namespace Collector.Api;
 public sealed class ClientsSyncResultDto
 {
     public long SnapshotId { get; set; }
-    public string SourceMode { get; set; } = "live";
+    public string SourceMode { get; set; } = SnapshotModes.Live;
     public int TotalRows { get; set; }
     public DateTime StartedAtUtc { get; set; }
     public DateTime FinishedAtUtc { get; set; }
@@ -35,13 +35,13 @@ public sealed class ClientListItemDto
     public string TotalWithCommissionRaw { get; set; } = string.Empty;
     public string DebtApproxText { get; set; } = string.Empty;
     public int? DebtApproxValue { get; set; }
-    public string DebtStatus { get; set; } = "empty";
+    public string DebtStatus { get; set; } = DebtStatuses.Empty;
     public string DebtSource { get; set; } = string.Empty;
     public DateTime? DebtUpdatedAtUtc { get; set; }
     public string DebtErrorCode { get; set; } = string.Empty;
     public string DebtErrorDetail { get; set; } = string.Empty;
     public DateTime CollectedAtUtc { get; set; }
-    public string DialogStatus { get; set; } = "none";
+    public string DialogStatus { get; set; } = DialogStatuses.None;
     public bool InPlan { get; set; }
     public long? InPlanRunSessionId { get; set; }
 }

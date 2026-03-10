@@ -12,8 +12,6 @@ namespace Collector.Api;
 
 public sealed class ClientSyncService(SettingsStore settingsStore)
 {
-    private const string SnapshotModeLive = "live";
-
     public async Task<ClientsSyncResultDto> SyncLiveFromRocketmanAsync(
         AppDbContext db,
         string loginUrl,
@@ -55,7 +53,7 @@ public sealed class ClientSyncService(SettingsStore settingsStore)
 
         var snapshot = new ClientSnapshot
         {
-            SourceMode = SnapshotModeLive,
+            SourceMode = SnapshotModes.Live,
             CreatedAtUtc = DateTime.UtcNow,
             TotalRows = rows.Count,
             Notes = "Собрано из таблицы Rocketman без захода в карточки клиентов."
@@ -194,18 +192,14 @@ public sealed class ClientSyncService(SettingsStore settingsStore)
                 .ToHashSet(StringComparer.Ordinal);
         }
 
-        var latestRunSessionId = await db.RunSessions
-            .AsNoTracking()
-            .OrderByDescending(x => x.Id)
-            .Select(x => (long?)x.Id)
-            .FirstOrDefaultAsync(cancellationToken);
+        var latestOpenRunSessionId = await GetLatestOpenRunSessionIdAsync(db, cancellationToken);
 
         HashSet<string> plannedExternalClientIds = [];
-        if (latestRunSessionId.HasValue && latestRunSessionId.Value > 0 && externalClientIds.Count > 0)
+        if (latestOpenRunSessionId.HasValue && latestOpenRunSessionId.Value > 0 && externalClientIds.Count > 0)
         {
             plannedExternalClientIds = (await db.RunJobs
                     .AsNoTracking()
-                    .Where(x => x.RunSessionId == latestRunSessionId.Value)
+                    .Where(x => x.RunSessionId == latestOpenRunSessionId.Value)
                     .Where(x => externalClientIds.Contains(x.ExternalClientId))
                     .Select(x => x.ExternalClientId)
                     .Distinct()
@@ -241,7 +235,7 @@ public sealed class ClientSyncService(SettingsStore settingsStore)
                         debtCacheByExternalClientId.TryGetValue(row.ExternalClientId, out var debtCache) ? debtCache : null,
                         dialogPhonesWithHistory.Contains(NormalizePhone(row.Phone)),
                         plannedExternalClientIds.Contains(row.ExternalClientId),
-                        latestRunSessionId,
+                        latestOpenRunSessionId,
                         settings.DebtBufferAmount))
                 .ToList()
         };
@@ -307,16 +301,35 @@ public sealed class ClientSyncService(SettingsStore settingsStore)
             TotalWithCommissionRaw = exactTotalRaw,
             DebtApproxText = approxDebtText,
             DebtApproxValue = approxDebtValue,
-            DebtStatus = FirstNonEmpty(debtCache?.Status, string.IsNullOrWhiteSpace(exactTotalRaw) ? "empty" : "ready"),
-            DebtSource = FirstNonEmpty(debtCache?.Source, string.IsNullOrWhiteSpace(exactTotalRaw) ? string.Empty : "snapshot"),
+            DebtStatus = FirstNonEmpty(debtCache?.Status, string.IsNullOrWhiteSpace(exactTotalRaw) ? DebtStatuses.Empty : DebtStatuses.Ready),
+            DebtSource = FirstNonEmpty(debtCache?.Source, string.IsNullOrWhiteSpace(exactTotalRaw) ? string.Empty : DebtSources.Snapshot),
             DebtUpdatedAtUtc = debtCache?.UpdatedAtUtc,
             DebtErrorCode = debtCache?.LastErrorCode ?? string.Empty,
             DebtErrorDetail = debtCache?.LastErrorDetail ?? string.Empty,
             CollectedAtUtc = row.CollectedAtUtc,
-            DialogStatus = hasDialogHistory ? "has_history" : "none",
+            DialogStatus = hasDialogHistory ? "has_history" : DialogStatuses.None,
             InPlan = inPlan,
             InPlanRunSessionId = inPlan ? inPlanRunSessionId : null
         };
+    }
+
+    private static async Task<long?> GetLatestOpenRunSessionIdAsync(
+        AppDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var openStatuses = new[]
+        {
+            RunSessionStatuses.Planned,
+            RunSessionStatuses.Running,
+            RunSessionStatuses.Stopped
+        };
+
+        return await db.RunSessions
+            .AsNoTracking()
+            .Where(x => openStatuses.Contains(x.Status))
+            .OrderByDescending(x => x.Id)
+            .Select(x => (long?)x.Id)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     private static string BuildApproxDebtText(string exactTotalRaw, int debtBufferAmount)
@@ -364,9 +377,7 @@ public sealed class ClientSyncService(SettingsStore settingsStore)
 
     private static string NormalizePhone(string rawPhone)
     {
-        var digits = new string((rawPhone ?? string.Empty).Where(char.IsDigit).ToArray());
-        if (digits.Length == 0) return string.Empty;
-        return $"+{digits}";
+        return PhoneNormalizer.Normalize(rawPhone);
     }
 
     private static int ParseTimezoneOffset(string timezoneRaw)

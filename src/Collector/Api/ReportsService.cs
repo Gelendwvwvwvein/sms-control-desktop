@@ -5,9 +5,9 @@ namespace Collector.Api;
 
 public sealed class ReportsService
 {
-    private const string MessageDirectionOut = "out";
-    private const string MessageStatusSent = "sent";
-    private const string MessageStatusFailed = "failed";
+    private const string MessageDirectionOut = MessageDirections.Out;
+    private const string MessageStatusSent = MessageGatewayStatuses.Sent;
+    private const string MessageStatusFailed = MessageGatewayStatuses.Failed;
 
     public async Task<WeeklyReportDto> GetWeeklyAsync(AppDbContext db, CancellationToken cancellationToken)
     {

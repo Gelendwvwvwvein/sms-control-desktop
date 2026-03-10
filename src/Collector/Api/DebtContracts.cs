@@ -9,7 +9,7 @@ public sealed class ClientDebtStateDto
     public string ExactTotalRaw { get; set; } = string.Empty;
     public string ApproxTotalText { get; set; } = string.Empty;
     public int? ApproxTotalValue { get; set; }
-    public string Status { get; set; } = "empty";
+    public string Status { get; set; } = DebtStatuses.Empty;
     public string Source { get; set; } = string.Empty;
     public DateTime? LastFetchedAtUtc { get; set; }
     public DateTime? UpdatedAtUtc { get; set; }

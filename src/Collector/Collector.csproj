@@ -13,6 +13,10 @@
 
   <ItemGroup>
     <EmbeddedResource Include="..\WebUiMock\index.html" LogicalName="Collector.WebUi.index.html" />
+    <EmbeddedResource Include="..\WebUiMock\app.shared.js" LogicalName="Collector.WebUi.app.shared.js" />
+    <EmbeddedResource Include="..\WebUiMock\app.helpers.js" LogicalName="Collector.WebUi.app.helpers.js" />
+    <EmbeddedResource Include="..\WebUiMock\app.actions.js" LogicalName="Collector.WebUi.app.actions.js" />
+    <EmbeddedResource Include="..\WebUiMock\app.render.js" LogicalName="Collector.WebUi.app.render.js" />
     <EmbeddedResource Include="..\WebUiMock\app.js" LogicalName="Collector.WebUi.app.js" />
     <EmbeddedResource Include="..\WebUiMock\styles.css" LogicalName="Collector.WebUi.styles.css" />
     <EmbeddedResource Include="..\WebUiMock\uikit.js" LogicalName="Collector.WebUi.uikit.js" />

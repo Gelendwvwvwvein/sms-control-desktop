@@ -9,6 +9,10 @@ public static class WebUiAssets
         {
             ["/"] = ("Collector.WebUi.index.html", "text/html; charset=utf-8"),
             ["/index.html"] = ("Collector.WebUi.index.html", "text/html; charset=utf-8"),
+            ["/app.shared.js"] = ("Collector.WebUi.app.shared.js", "application/javascript; charset=utf-8"),
+            ["/app.helpers.js"] = ("Collector.WebUi.app.helpers.js", "application/javascript; charset=utf-8"),
+            ["/app.actions.js"] = ("Collector.WebUi.app.actions.js", "application/javascript; charset=utf-8"),
+            ["/app.render.js"] = ("Collector.WebUi.app.render.js", "application/javascript; charset=utf-8"),
             ["/app.js"] = ("Collector.WebUi.app.js", "application/javascript; charset=utf-8"),
             ["/styles.css"] = ("Collector.WebUi.styles.css", "text/css; charset=utf-8"),
             ["/uikit.js"] = ("Collector.WebUi.uikit.js", "application/javascript; charset=utf-8"),

@@ -22,7 +22,7 @@ public sealed class QueueAppliedFilterDto
 public sealed class QueuePreviewDto
 {
     public long SnapshotId { get; set; }
-    public string SourceMode { get; set; } = "live";
+    public string SourceMode { get; set; } = SnapshotModes.Live;
     public int TotalRowsInSnapshot { get; set; }
     public int MatchedByFilter { get; set; }
     public int ExcludedByStopList { get; set; }
@@ -50,7 +50,7 @@ public sealed class QueueForecastDto
 public sealed class QueueBuildResultDto
 {
     public long RunSessionId { get; set; }
-    public string Status { get; set; } = "planned";
+    public string Status { get; set; } = RunSessionStatuses.Planned;
     public DateTime CreatedAtUtc { get; set; }
     public int CreatedJobs { get; set; }
     public QueuePreviewDto Preview { get; set; } = new();
@@ -98,7 +98,7 @@ public sealed class QueueJobDto
     public string TotalWithCommissionRaw { get; set; } = string.Empty;
     public string DebtApproxText { get; set; } = string.Empty;
     public int? DebtApproxValue { get; set; }
-    public string DebtStatus { get; set; } = "empty";
+    public string DebtStatus { get; set; } = DebtStatuses.Empty;
     public string DebtSource { get; set; } = string.Empty;
     public DateTime? DebtUpdatedAtUtc { get; set; }
     public string DebtErrorCode { get; set; } = string.Empty;
@@ -111,7 +111,7 @@ public sealed class QueueJobDto
     public string PreviewErrorDetail { get; set; } = string.Empty;
     public bool HasMessageOverride { get; set; }
     public string MessageOverrideText { get; set; } = string.Empty;
-    public string DialogStatus { get; set; } = "none";
+    public string DialogStatus { get; set; } = DialogStatuses.None;
     public int DialogMessagesCount { get; set; }
 }
 

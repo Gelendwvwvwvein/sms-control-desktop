@@ -87,7 +87,7 @@ public sealed class RuleEngineService
         var raw = ExtractTotalWithCommissionRaw(payloadJson);
         if (!TryParseAmount(raw, out var amount))
         {
-            return "0р";
+            return string.Empty;
         }
 
         var withBuffer = amount + Math.Clamp(debtBufferAmount, 0, MaxDebtBufferAmount);
@@ -152,7 +152,7 @@ public sealed class RuleEngineService
                 return string.Empty;
             }
 
-            if (!doc.RootElement.TryGetProperty("totalWithCommissionRaw", out var totalNode))
+            if (!doc.RootElement.TryGetProperty(PayloadFields.TotalWithCommissionRaw, out var totalNode))
             {
                 return string.Empty;
             }

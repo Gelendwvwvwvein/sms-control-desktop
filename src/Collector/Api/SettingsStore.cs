@@ -3,6 +3,7 @@ using System.Globalization;
 using Collector.Data;
 using Collector.Data.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Collector.Api;
 
@@ -11,6 +12,8 @@ public sealed class SettingsStore
     private const string AppSettingsKey = "app_settings";
     private const string OverdueModeRange = "range";
     private const string OverdueModeExact = "exact";
+    private const string SettingsFallbackAlertText = "Настройки приложения повреждены: используются безопасные значения по умолчанию.";
+    private const string SettingsFallbackAlertKind = "settings_invalid_payload";
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly IReadOnlyList<TemplateRuleTypeDto> DefaultTemplateRuleTypes =
     [
@@ -22,23 +25,82 @@ public sealed class SettingsStore
         new() { Id = "ka2", Name = "СМС от КА2", OverdueMode = OverdueModeRange, OverdueFromDays = 46, OverdueToDays = 50, OverdueExactDay = null, AutoAssign = true, SortOrder = 60 },
         new() { Id = "ka_final", Name = "СМС от КА (финал)", OverdueMode = OverdueModeRange, OverdueFromDays = 51, OverdueToDays = 59, OverdueExactDay = null, AutoAssign = true, SortOrder = 70 }
     ];
+    private readonly ILogger<SettingsStore> _logger;
+    private readonly object _fallbackSignalLock = new();
+    private string _fallbackSignalSignature = string.Empty;
+
+    public SettingsStore(ILogger<SettingsStore> logger)
+    {
+        _logger = logger;
+    }
 
     public async Task<AppSettingsDto> GetAsync(AppDbContext db, CancellationToken cancellationToken)
     {
+        var defaultSettings = Normalize(new AppSettingsDto());
         var row = await db.Settings.FirstOrDefaultAsync(x => x.Key == AppSettingsKey, cancellationToken);
-        if (row is null || string.IsNullOrWhiteSpace(row.ValueJson))
+        if (row is null)
         {
-            return new AppSettingsDto();
+            return defaultSettings;
+        }
+
+        if (string.IsNullOrWhiteSpace(row.ValueJson))
+        {
+            await ReportInvalidSettingsFallbackAsync(
+                db,
+                code: "SETTINGS_PAYLOAD_EMPTY",
+                detail: "Запись app_settings существует, но value_json пустой.",
+                rawPayload: row.ValueJson,
+                exception: null,
+                cancellationToken);
+            return defaultSettings;
         }
 
         try
         {
             var parsed = JsonSerializer.Deserialize<AppSettingsDto>(row.ValueJson, JsonOptions);
-            return Normalize(parsed ?? new AppSettingsDto());
+            if (parsed is null)
+            {
+                await ReportInvalidSettingsFallbackAsync(
+                    db,
+                    code: "SETTINGS_PAYLOAD_NULL",
+                    detail: "Десериализация app_settings вернула null.",
+                    rawPayload: row.ValueJson,
+                    exception: null,
+                    cancellationToken);
+                return defaultSettings;
+            }
+
+            if (HasFallbackSignal())
+            {
+                await ResolveSettingsFallbackSignalAsync(
+                    db,
+                    "Настройки снова читаются корректно.",
+                    cancellationToken);
+            }
+
+            return Normalize(parsed);
         }
-        catch
+        catch (JsonException ex)
         {
-            return new AppSettingsDto();
+            await ReportInvalidSettingsFallbackAsync(
+                db,
+                code: "SETTINGS_PAYLOAD_JSON_INVALID",
+                detail: "Не удалось десериализовать app_settings как AppSettingsDto.",
+                rawPayload: row.ValueJson,
+                exception: ex,
+                cancellationToken);
+            return defaultSettings;
+        }
+        catch (Exception ex)
+        {
+            await ReportInvalidSettingsFallbackAsync(
+                db,
+                code: "SETTINGS_PAYLOAD_READ_FAILED",
+                detail: "Ошибка чтения app_settings.",
+                rawPayload: row.ValueJson,
+                exception: ex,
+                cancellationToken);
+            return defaultSettings;
         }
     }
 
@@ -66,6 +128,10 @@ public sealed class SettingsStore
         }
 
         await db.SaveChangesAsync(cancellationToken);
+        await ResolveSettingsFallbackSignalAsync(
+            db,
+            "Настройки сохранены в корректном формате.",
+            cancellationToken);
         return normalized;
     }
 
@@ -346,5 +412,215 @@ public sealed class SettingsStore
         }
 
         return parsed.ToString("HH:mm", CultureInfo.InvariantCulture);
+    }
+
+    private bool HasFallbackSignal()
+    {
+        lock (_fallbackSignalLock)
+        {
+            return !string.IsNullOrWhiteSpace(_fallbackSignalSignature);
+        }
+    }
+
+    private async Task ReportInvalidSettingsFallbackAsync(
+        AppDbContext db,
+        string code,
+        string detail,
+        string? rawPayload,
+        Exception? exception,
+        CancellationToken cancellationToken)
+    {
+        var signature = BuildFallbackSignature(code, rawPayload, exception);
+        var shouldPersist = false;
+        lock (_fallbackSignalLock)
+        {
+            if (!string.Equals(_fallbackSignalSignature, signature, StringComparison.Ordinal))
+            {
+                _fallbackSignalSignature = signature;
+                shouldPersist = true;
+            }
+        }
+
+        _logger.LogError(
+            exception,
+            "Некорректные настройки в таблице settings. Code={Code}; Detail={Detail}; Payload={PayloadPreview}",
+            code,
+            detail,
+            TrimForSignal(rawPayload, 300));
+
+        if (!shouldPersist)
+        {
+            return;
+        }
+
+        try
+        {
+            await using var signalDb = TryCreateSignalDbContext(db);
+            if (signalDb is null)
+            {
+                return;
+            }
+
+            var nowUtc = DateTime.UtcNow;
+            var metaJson = JsonSerializer.Serialize(new
+            {
+                kind = SettingsFallbackAlertKind,
+                code,
+                detail,
+                exception = exception?.Message ?? string.Empty,
+                payloadPreview = TrimForSignal(rawPayload, 1000),
+                detectedAtUtc = nowUtc
+            });
+
+            var activeAlert = await signalDb.Alerts
+                .FirstOrDefaultAsync(
+                    x => x.ChannelId == null &&
+                         x.Text == SettingsFallbackAlertText &&
+                         x.Status == AlertService.StatusActive,
+                    cancellationToken);
+
+            if (activeAlert is null)
+            {
+                signalDb.Alerts.Add(new AlertRecord
+                {
+                    Level = "error",
+                    Text = SettingsFallbackAlertText,
+                    Status = AlertService.StatusActive,
+                    ChannelId = null,
+                    CreatedAtUtc = nowUtc,
+                    ClosedAtUtc = null,
+                    MetaJson = metaJson
+                });
+            }
+            else
+            {
+                activeAlert.Level = "error";
+                activeAlert.Status = AlertService.StatusActive;
+                activeAlert.ClosedAtUtc = null;
+                activeAlert.MetaJson = metaJson;
+                signalDb.Alerts.Update(activeAlert);
+            }
+
+            EventService.Append(
+                signalDb,
+                category: "system",
+                eventType: "settings_fallback_activated",
+                severity: "error",
+                message: SettingsFallbackAlertText,
+                payload: new
+                {
+                    kind = SettingsFallbackAlertKind,
+                    code,
+                    detail,
+                    exception = exception?.Message ?? string.Empty,
+                    payloadPreview = TrimForSignal(rawPayload, 1000),
+                    detectedAtUtc = nowUtc
+                });
+
+            await signalDb.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception signalEx)
+        {
+            _logger.LogError(signalEx, "Не удалось записать alert/event о поврежденных настройках.");
+        }
+    }
+
+    private async Task ResolveSettingsFallbackSignalAsync(
+        AppDbContext db,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        lock (_fallbackSignalLock)
+        {
+            _fallbackSignalSignature = string.Empty;
+        }
+
+        try
+        {
+            await using var signalDb = TryCreateSignalDbContext(db);
+            if (signalDb is null)
+            {
+                return;
+            }
+
+            var activeAlerts = await signalDb.Alerts
+                .Where(x => x.ChannelId == null)
+                .Where(x => x.Text == SettingsFallbackAlertText)
+                .Where(x => x.Status == AlertService.StatusActive)
+                .ToListAsync(cancellationToken);
+
+            if (activeAlerts.Count == 0)
+            {
+                return;
+            }
+
+            var nowUtc = DateTime.UtcNow;
+            foreach (var alert in activeAlerts)
+            {
+                alert.Status = AlertService.StatusResolved;
+                alert.ClosedAtUtc = nowUtc;
+                alert.MetaJson = JsonSerializer.Serialize(new
+                {
+                    kind = SettingsFallbackAlertKind,
+                    resolvedAtUtc = nowUtc,
+                    resolvedReason = reason
+                });
+            }
+
+            signalDb.Alerts.UpdateRange(activeAlerts);
+            EventService.Append(
+                signalDb,
+                category: "system",
+                eventType: "settings_fallback_resolved",
+                severity: "info",
+                message: "Поврежденные настройки больше не используются.",
+                payload: new
+                {
+                    kind = SettingsFallbackAlertKind,
+                    resolvedAtUtc = nowUtc,
+                    resolvedReason = reason
+                });
+
+            await signalDb.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Не удалось закрыть alert/event о поврежденных настройках.");
+        }
+    }
+
+    private static AppDbContext? TryCreateSignalDbContext(AppDbContext db)
+    {
+        var connectionString = db.Database.GetConnectionString();
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return null;
+        }
+
+        var optionsBuilder = new DbContextOptionsBuilder<AppDbContext>();
+        optionsBuilder.UseSqlite(connectionString);
+        return new AppDbContext(optionsBuilder.Options);
+    }
+
+    private static string BuildFallbackSignature(string code, string? rawPayload, Exception? exception)
+    {
+        return string.Join(
+            "|",
+            (code ?? string.Empty).Trim(),
+            TrimForSignal(rawPayload, 1000),
+            TrimForSignal(exception?.Message, 300));
+    }
+
+    private static string TrimForSignal(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value) || maxLength <= 0)
+        {
+            return string.Empty;
+        }
+
+        var normalized = value.Trim();
+        return normalized.Length <= maxLength
+            ? normalized
+            : normalized[..maxLength];
     }
 }

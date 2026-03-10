@@ -170,26 +170,57 @@ public sealed class StopListService
             }
         }
 
-        var added = 0;
+        if (validPhones.Count == 0)
+        {
+            return new StopListBulkResultDto
+            {
+                Requested = (payload.Phones ?? []).Count,
+                Added = 0,
+                Removed = 0,
+                Skipped = 0,
+                InvalidPhones = invalidPhones
+            };
+        }
+
+        var now = DateTime.UtcNow;
+        var existingRecords = await db.StopList
+            .Where(x => validPhones.Contains(x.Phone))
+            .OrderByDescending(x => x.Id)
+            .ToListAsync(cancellationToken);
+        var latestByPhone = existingRecords
+            .GroupBy(x => x.Phone)
+            .ToDictionary(x => x.Key, x => x.First(), StringComparer.Ordinal);
+
         foreach (var normalizedPhone in validPhones)
         {
-            var upsert = new StopListUpsertRequest
+            if (latestByPhone.TryGetValue(normalizedPhone, out var record))
+            {
+                record.Reason = reason;
+                record.Source = source;
+                record.IsActive = true;
+                record.AddedAtUtc = now;
+                db.StopList.Update(record);
+                continue;
+            }
+
+            db.StopList.Add(new StopListRecord
             {
                 Phone = normalizedPhone,
                 Reason = reason,
                 Source = source,
+                AddedAtUtc = now,
                 IsActive = true
-            };
-            await CreateOrActivateAsync(db, upsert, cancellationToken);
-            added++;
+            });
         }
+
+        await db.SaveChangesAsync(cancellationToken);
 
         return new StopListBulkResultDto
         {
             Requested = (payload.Phones ?? []).Count,
-            Added = added,
+            Added = validPhones.Count,
             Removed = 0,
-            Skipped = validPhones.Count - added,
+            Skipped = 0,
             InvalidPhones = invalidPhones
         };
     }
@@ -213,18 +244,45 @@ public sealed class StopListService
             }
         }
 
-        var removed = 0;
-        foreach (var normalizedPhone in validPhones)
+        if (validPhones.Count == 0)
         {
-            removed += await DeactivateByPhoneAsync(db, normalizedPhone, cancellationToken);
+            return new StopListBulkResultDto
+            {
+                Requested = (payload.Phones ?? []).Count,
+                Added = 0,
+                Removed = 0,
+                Skipped = 0,
+                InvalidPhones = invalidPhones
+            };
         }
+
+        var activeRows = await db.StopList
+            .Where(x => validPhones.Contains(x.Phone) && x.IsActive)
+            .ToListAsync(cancellationToken);
+
+        foreach (var row in activeRows)
+        {
+            row.IsActive = false;
+        }
+
+        if (activeRows.Count > 0)
+        {
+            db.StopList.UpdateRange(activeRows);
+            await db.SaveChangesAsync(cancellationToken);
+        }
+
+        var removedPhones = activeRows
+            .Select(x => x.Phone)
+            .Where(x => !string.IsNullOrWhiteSpace(x))
+            .Distinct(StringComparer.Ordinal)
+            .Count();
 
         return new StopListBulkResultDto
         {
             Requested = (payload.Phones ?? []).Count,
             Added = 0,
-            Removed = removed,
-            Skipped = validPhones.Count - removed,
+            Removed = removedPhones,
+            Skipped = Math.Max(0, validPhones.Count - removedPhones),
             InvalidPhones = invalidPhones
         };
     }
@@ -318,14 +376,8 @@ public sealed class StopListService
 
     private static bool TryNormalizePhone(string? rawPhone, out string normalized)
     {
-        normalized = string.Empty;
-        if (string.IsNullOrWhiteSpace(rawPhone)) return false;
-
-        var digits = new string(rawPhone.Where(char.IsDigit).ToArray());
-        if (digits.Length < 10 || digits.Length > 15) return false;
-
-        normalized = $"+{digits}";
-        return true;
+        normalized = PhoneNormalizer.Normalize(rawPhone, minDigits: 10, maxDigits: 15);
+        return !string.IsNullOrEmpty(normalized);
     }
 
     private static string NormalizeSource(string? rawSource)
