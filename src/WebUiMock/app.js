@@ -45,6 +45,7 @@ const MSK_TZ_LABEL = {
 const MSK_UTC_OFFSET_MIN = 0;
 const DEFAULT_WORK_WINDOW_START = "08:00";
 const DEFAULT_WORK_WINDOW_END = "21:00";
+const DEFAULT_DEBT_BUFFER_AMOUNT = 2000;
 const ROCKETMAN_CARD_URL_PREFIX = "https://rocketman.ru/manager/collector-comment/view?id=";
 const DEFAULT_TEMPLATE_KIND = "sms1";
 const DEFAULT_TEMPLATE_OVERDUE_MODE = "range";
@@ -691,6 +692,12 @@ function getGapMinutes() {
   return Math.round(value);
 }
 
+function getDebtBufferAmount() {
+  const value = Number($("cfgDebtBufferAmount")?.value);
+  if (!Number.isFinite(value) || value < 0) return DEFAULT_DEBT_BUFFER_AMOUNT;
+  return Math.min(1000000, Math.round(value));
+}
+
 function getRecentSmsCooldownDays() {
   const value = Number($("cfgRecentSmsCooldownDays")?.value);
   if (!Number.isFinite(value) || value < 0) return 0;
@@ -741,7 +748,7 @@ function parseAmount(value) {
 function formatApproxDebtFromTotal(totalWithCommission) {
   const numeric = parseAmount(totalWithCommission);
   if (!Number.isFinite(numeric)) return "";
-  const rounded = Math.round((numeric + 2000) / 1000) * 1000;
+  const rounded = Math.round((numeric + getDebtBufferAmount()) / 1000) * 1000;
   return `${rounded.toLocaleString("ru-RU")} руб.`;
 }
 
@@ -4117,6 +4124,7 @@ function readSettingsDraftFromUI() {
     login: $("cfgLogin").value.trim(),
     password: $("cfgPassword").value,
     gap: $("cfgGap").value.trim(),
+    debtBufferAmount: $("cfgDebtBufferAmount").value.trim(),
     recentSmsCooldownDays: $("cfgRecentSmsCooldownDays").value.trim(),
     allowLiveDispatch: $("cfgAllowLiveDispatch")?.checked !== false,
     workWindowStart: $("cfgWorkWindowStart").value.trim() || DEFAULT_WORK_WINDOW_START,
@@ -4139,6 +4147,9 @@ function applySettingsDraftToUI(settings) {
   }
   if (Object.prototype.hasOwnProperty.call(settings, "gap")) {
     $("cfgGap").value = settings.gap ?? "";
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, "debtBufferAmount")) {
+    $("cfgDebtBufferAmount").value = settings.debtBufferAmount ?? DEFAULT_DEBT_BUFFER_AMOUNT;
   }
   if (Object.prototype.hasOwnProperty.call(settings, "recentSmsCooldownDays")) {
     $("cfgRecentSmsCooldownDays").value = settings.recentSmsCooldownDays ?? 0;
@@ -5742,11 +5753,15 @@ async function switchTab(tabId, options = {}) {
 async function saveSettings(options = {}) {
   const { silent = false } = options;
   const draft = readSettingsDraftFromUI();
+  const parsedDebtBufferAmount = Number(draft.debtBufferAmount);
   const payload = {
     loginUrl: draft.loginUrl,
     login: draft.login,
     password: draft.password,
     gap: Math.max(1, Math.round(Number(draft.gap) || 8)),
+    debtBufferAmount: Number.isFinite(parsedDebtBufferAmount)
+      ? Math.max(0, Math.min(1000000, Math.round(parsedDebtBufferAmount)))
+      : DEFAULT_DEBT_BUFFER_AMOUNT,
     recentSmsCooldownDays: Math.max(0, Math.min(365, Math.round(Number(draft.recentSmsCooldownDays) || 0))),
     allowLiveDispatch: draft.allowLiveDispatch !== false,
     workWindowStart: draft.workWindowStart,
@@ -5781,6 +5796,7 @@ async function saveSettings(options = {}) {
       login: saved.login,
       password: saved.password,
       gap: saved.gap,
+      debtBufferAmount: saved.debtBufferAmount,
       recentSmsCooldownDays: saved.recentSmsCooldownDays,
       allowLiveDispatch: saved.allowLiveDispatch,
       workWindowStart: saved.workWindowStart,
@@ -5799,6 +5815,10 @@ async function saveSettings(options = {}) {
     renderConfiguredOverdueFilters({ preserveSelection: true });
     collectRunFiltersFromUI();
     renderRunFilterSummary();
+    await refreshClientsSnapshotFromBackend({ silent: true });
+    await refreshQueueFromBackend({ silent: true, runSessionId: state.queueSessionId || null });
+    renderDialogs();
+    renderChat();
     await refreshRunStatusFromBackend({ silent: true });
     void refreshRunForecastFromBackend({ silent: true });
     if (!silent) {
@@ -5821,6 +5841,7 @@ async function loadSettings() {
       login: data.login,
       password: data.password,
       gap: data.gap,
+      debtBufferAmount: data.debtBufferAmount,
       recentSmsCooldownDays: data.recentSmsCooldownDays,
       allowLiveDispatch: data.allowLiveDispatch,
       workWindowStart: data.workWindowStart,
@@ -7219,6 +7240,14 @@ function bindEvents() {
     void refreshRunForecastFromBackend({ silent: true });
     renderRunFilterSummary();
   });
+  if ($("cfgDebtBufferAmount")) {
+    $("cfgDebtBufferAmount").addEventListener("input", () => {
+      renderClients();
+      renderQueue();
+      renderDialogs();
+      renderChat();
+    });
+  }
   if ($("cfgRecentSmsCooldownDays")) {
     $("cfgRecentSmsCooldownDays").addEventListener("input", () => {
       void refreshRunForecastFromBackend({ silent: true });

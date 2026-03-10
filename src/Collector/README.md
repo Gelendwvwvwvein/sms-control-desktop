@@ -143,7 +143,7 @@ dotnet run --project src/Collector/Collector.csproj -- --output "out/clients.jso
     - `queue/build` pre-fills `run_jobs.template_id` по правилу просрочки активного шаблона (`range` или `exact`);
     - if `templateId` is empty, template is auto-picked by its overdue rule from active templates (`autoAssign=true`);
     - if active templates are missing/incompatible, задача получает ошибку `TEMPLATE_NOT_RESOLVED`/`TEMPLATE_RENDER_EMPTY` и не отправляется;
-    - tokens `{полное_фио}` and `{сумма_долга}` are rendered before send (`сумма_долга` = `итого + 2000`, rounding to nearest 1000, midpoint up);
+    - tokens `{полное_фио}` and `{сумма_долга}` are rendered before send (`сумма_долга` = `итого + debtBufferAmount` from settings, rounding to nearest 1000, midpoint up);
     - комментарий в договор после успешной отправки берется из `commentText` выбранного шаблона;
     - delivery pipeline включает рендер шаблона, назначение канала, retry/failover и алерты.
   - Debt cache:
@@ -156,8 +156,15 @@ dotnet run --project src/Collector/Collector.csproj -- --output "out/clients.jso
     - автоматическая синхронизация входящих SMS с устройств отключена.
   - Settings payload now includes work window fields:
     - `allowLiveDispatch` (bool; blocks/allows real `live` run start from UI/API)
+    - `debtBufferAmount` (int; how much is added to exact debt before rounding for `{сумма_долга}`)
     - `workWindowStart` (HH:mm)
     - `workWindowEnd` (HH:mm)
+  - Web UI footnotes/hints are styled uniformly:
+    - use `p.ui-notice.ui-notice-info.footnote-note` for UI footnotes;
+    - use `ui-notice-warning footnote-note` for warning footnotes when the text describes an обязательное ограничение or risk;
+    - prefix `Подсказка:` is added via CSS `::before`, not duplicated in HTML text;
+    - use `muted-note` only for neutral descriptions and meta-text without hint semantics;
+    - do not use `muted-note` for footnotes that should look like standard hints.
   - `run/start` blocks launch when:
     - no planned queue exists;
     - queue is empty;

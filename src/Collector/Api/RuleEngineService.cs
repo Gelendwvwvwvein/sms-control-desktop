@@ -10,6 +10,8 @@ namespace Collector.Api;
 public sealed class RuleEngineService
 {
     private const string TemplateStatusActive = "active";
+    public const int DefaultDebtBufferAmount = 2000;
+    public const int MaxDebtBufferAmount = 1_000_000;
 
     public async Task<List<TemplateRecord>> GetActiveTemplatesAsync(AppDbContext db, CancellationToken cancellationToken)
     {
@@ -26,10 +28,13 @@ public sealed class RuleEngineService
         return template?.Id;
     }
 
-    public RuleEngineMessageResult BuildDispatchMessage(IReadOnlyList<TemplateRecord> activeTemplates, RunJobRecord job)
+    public RuleEngineMessageResult BuildDispatchMessage(
+        IReadOnlyList<TemplateRecord> activeTemplates,
+        RunJobRecord job,
+        int debtBufferAmount = DefaultDebtBufferAmount)
     {
         var fio = string.IsNullOrWhiteSpace(job.ClientFio) ? "Клиент" : job.ClientFio.Trim();
-        var debtText = BuildApproxDebtText(job.PayloadJson);
+        var debtText = BuildApproxDebtText(job.PayloadJson, debtBufferAmount);
 
         TemplateRecord? selected = null;
         if (job.TemplateId.HasValue && job.TemplateId.Value > 0)
@@ -75,7 +80,9 @@ public sealed class RuleEngineService
         };
     }
 
-    public static string BuildApproxDebtText(string? payloadJson)
+    public static string BuildApproxDebtText(
+        string? payloadJson,
+        int debtBufferAmount = DefaultDebtBufferAmount)
     {
         var raw = ExtractTotalWithCommissionRaw(payloadJson);
         if (!TryParseAmount(raw, out var amount))
@@ -83,7 +90,7 @@ public sealed class RuleEngineService
             return "0р";
         }
 
-        var withBuffer = amount + 2000m;
+        var withBuffer = amount + Math.Clamp(debtBufferAmount, 0, MaxDebtBufferAmount);
         var rounded = RoundToNearestThousandMidpointUp(withBuffer);
         return $"{rounded:0}р";
     }

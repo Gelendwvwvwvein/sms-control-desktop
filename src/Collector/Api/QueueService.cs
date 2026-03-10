@@ -243,7 +243,7 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
                         exactDebtRaw)
                 };
 
-                var preview = BuildPreviewForJob(job, activeTemplates, now);
+                var preview = BuildPreviewForJob(job, activeTemplates, settings, now);
                 ApplyPreviewToJob(job, preview);
                 return job;
             })
@@ -316,6 +316,8 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
         var totalJobs = await db.RunJobs
             .AsNoTracking()
             .CountAsync(x => x.RunSessionId == session.Id, cancellationToken);
+
+        var settings = await settingsStore.GetAsync(db, cancellationToken);
 
         var rows = await db.RunJobs
             .AsNoTracking()
@@ -400,7 +402,8 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
                         templatesById,
                         channelsById,
                         debtCacheByExternalClientId.TryGetValue(x.ExternalClientId, out var debtCache) ? debtCache : null,
-                        dialogCountsByPhone))
+                        dialogCountsByPhone,
+                        settings.DebtBufferAmount))
                 .ToList()
         };
     }
@@ -617,9 +620,10 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
         {
             var now = DateTime.UtcNow;
             var activeTemplates = await ruleEngine.GetActiveTemplatesAsync(db, cancellationToken);
+            var settings = await settingsStore.GetAsync(db, cancellationToken);
             foreach (var job in toUpdate)
             {
-                var preview = BuildPreviewForJob(job, activeTemplates, now);
+                var preview = BuildPreviewForJob(job, activeTemplates, settings, now);
                 ApplyPreviewToJob(job, preview);
             }
             db.RunJobs.UpdateRange(toUpdate);
@@ -688,7 +692,8 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
 
         var now = DateTime.UtcNow;
         var activeTemplates = await ruleEngine.GetActiveTemplatesAsync(db, cancellationToken);
-        var preview = BuildPreviewForJob(job, activeTemplates, now);
+        var settings = await settingsStore.GetAsync(db, cancellationToken);
+        var preview = BuildPreviewForJob(job, activeTemplates, settings, now);
 
         if (request.Persist)
         {
@@ -759,7 +764,8 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
 
         var now = DateTime.UtcNow;
         var activeTemplates = await ruleEngine.GetActiveTemplatesAsync(db, cancellationToken);
-        var preview = BuildPreviewForJob(job, activeTemplates, now);
+        var settings = await settingsStore.GetAsync(db, cancellationToken);
+        var preview = BuildPreviewForJob(job, activeTemplates, settings, now);
         ApplyPreviewToJob(job, preview);
 
         db.RunJobs.Update(job);
@@ -805,7 +811,8 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
 
         var now = DateTime.UtcNow;
         var activeTemplates = await ruleEngine.GetActiveTemplatesAsync(db, cancellationToken);
-        var preview = BuildPreviewForJob(job, activeTemplates, now);
+        var settings = await settingsStore.GetAsync(db, cancellationToken);
+        var preview = BuildPreviewForJob(job, activeTemplates, settings, now);
         ApplyPreviewToJob(job, preview);
 
         db.RunJobs.Update(job);
@@ -935,7 +942,8 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
         IReadOnlyDictionary<long, TemplateRecord> templatesById,
         IReadOnlyDictionary<long, SenderChannelRecord> channelsById,
         ClientDebtCacheRecord? debtCache,
-        IReadOnlyDictionary<string, int> dialogCountsByPhone)
+        IReadOnlyDictionary<string, int> dialogCountsByPhone,
+        int debtBufferAmount)
     {
         TemplateRecord? template = null;
         if (row.TemplateId.HasValue && row.TemplateId.Value > 0)
@@ -956,7 +964,10 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
             : 0;
 
         var exactTotalRaw = FirstNonEmpty(debtCache?.ExactTotalRaw, TryExtractPayloadTotal(row.PayloadJson));
-        var approxDebtText = FirstNonEmpty(debtCache?.ApproxTotalText, BuildApproxDebtText(exactTotalRaw));
+        var approxDebtText = !string.IsNullOrWhiteSpace(exactTotalRaw)
+            ? BuildApproxDebtText(exactTotalRaw, debtBufferAmount)
+            : FirstNonEmpty(debtCache?.ApproxTotalText, string.Empty);
+        var approxDebtValue = ParseApproxValue(approxDebtText);
         var messageOverrideText = TryExtractPayloadString(row.PayloadJson, PayloadFieldMessageOverride);
 
         return new QueueJobDto
@@ -986,7 +997,7 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
             CardUrl = TryExtractCardUrl(row.PayloadJson),
             TotalWithCommissionRaw = exactTotalRaw,
             DebtApproxText = approxDebtText,
-            DebtApproxValue = debtCache?.ApproxTotalValue,
+            DebtApproxValue = approxDebtValue,
             DebtStatus = FirstNonEmpty(debtCache?.Status, string.IsNullOrWhiteSpace(exactTotalRaw) ? "empty" : "ready"),
             DebtSource = FirstNonEmpty(debtCache?.Source, string.IsNullOrWhiteSpace(exactTotalRaw) ? string.Empty : "payload"),
             DebtUpdatedAtUtc = debtCache?.UpdatedAtUtc,
@@ -1143,13 +1154,14 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
     private JobPreviewResult BuildPreviewForJob(
         RunJobRecord job,
         IReadOnlyList<TemplateRecord> activeTemplates,
+        AppSettingsDto settings,
         DateTime nowUtc)
     {
         var messageOverrideText = TryExtractPayloadString(job.PayloadJson, PayloadFieldMessageOverride);
         if (!string.IsNullOrWhiteSpace(messageOverrideText))
         {
             var totalRawOverride = TryExtractPayloadTotal(job.PayloadJson);
-            var approxDebtTextOverride = RuleEngineService.BuildApproxDebtText(job.PayloadJson);
+            var approxDebtTextOverride = RuleEngineService.BuildApproxDebtText(job.PayloadJson, settings.DebtBufferAmount);
             var templateOverride = job.TemplateId.HasValue && job.TemplateId.Value > 0
                 ? activeTemplates.FirstOrDefault(x => x.Id == job.TemplateId.Value)
                 : null;
@@ -1179,7 +1191,7 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
             };
         }
 
-        var rendered = ruleEngine.BuildDispatchMessage(activeTemplates, job);
+        var rendered = ruleEngine.BuildDispatchMessage(activeTemplates, job, settings.DebtBufferAmount);
         if (!string.IsNullOrWhiteSpace(rendered.ErrorCode))
         {
             return new JobPreviewResult
@@ -1201,7 +1213,7 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
             : null;
 
         var totalRaw = TryExtractPayloadTotal(job.PayloadJson);
-        var approxDebtText = RuleEngineService.BuildApproxDebtText(job.PayloadJson);
+        var approxDebtText = RuleEngineService.BuildApproxDebtText(job.PayloadJson, settings.DebtBufferAmount);
         var status = string.IsNullOrWhiteSpace(totalRaw)
             ? PreviewStatusNeedsDebt
             : PreviewStatusReady;
@@ -1280,7 +1292,7 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
         };
     }
 
-    private static string BuildApproxDebtText(string exactTotalRaw)
+    private static string BuildApproxDebtText(string exactTotalRaw, int debtBufferAmount)
     {
         if (string.IsNullOrWhiteSpace(exactTotalRaw))
         {
@@ -1291,7 +1303,23 @@ public sealed partial class QueueService(RuleEngineService ruleEngine, SettingsS
         {
             totalWithCommissionRaw = exactTotalRaw
         });
-        return RuleEngineService.BuildApproxDebtText(payload);
+        return RuleEngineService.BuildApproxDebtText(payload, debtBufferAmount);
+    }
+
+    private static int? ParseApproxValue(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var digits = new string(value.Where(char.IsDigit).ToArray());
+        if (string.IsNullOrWhiteSpace(digits))
+        {
+            return null;
+        }
+
+        return int.TryParse(digits, out var parsed) ? parsed : null;
     }
 
     private static string FirstNonEmpty(params string?[] values)

@@ -10,7 +10,7 @@ using Microsoft.Playwright;
 
 namespace Collector.Api;
 
-public sealed class ClientSyncService
+public sealed class ClientSyncService(SettingsStore settingsStore)
 {
     private const string SnapshotModeLive = "live";
 
@@ -221,6 +221,8 @@ public sealed class ClientSyncService
                 .Where(x => externalClientIds.Contains(x.ExternalClientId))
                 .ToDictionaryAsync(x => x.ExternalClientId, cancellationToken);
 
+        var settings = await settingsStore.GetAsync(db, cancellationToken);
+
         return new ClientsListDto
         {
             Snapshot = new ClientsSyncStatusDto
@@ -239,7 +241,8 @@ public sealed class ClientSyncService
                         debtCacheByExternalClientId.TryGetValue(row.ExternalClientId, out var debtCache) ? debtCache : null,
                         dialogPhonesWithHistory.Contains(NormalizePhone(row.Phone)),
                         plannedExternalClientIds.Contains(row.ExternalClientId),
-                        latestRunSessionId))
+                        latestRunSessionId,
+                        settings.DebtBufferAmount))
                 .ToList()
         };
     }
@@ -281,10 +284,14 @@ public sealed class ClientSyncService
         ClientDebtCacheRecord? debtCache,
         bool hasDialogHistory,
         bool inPlan,
-        long? inPlanRunSessionId)
+        long? inPlanRunSessionId,
+        int debtBufferAmount)
     {
         var exactTotalRaw = FirstNonEmpty(debtCache?.ExactTotalRaw, row.TotalWithCommissionRaw);
-        var approxDebtText = FirstNonEmpty(debtCache?.ApproxTotalText, BuildApproxDebtText(exactTotalRaw));
+        var approxDebtText = !string.IsNullOrWhiteSpace(exactTotalRaw)
+            ? BuildApproxDebtText(exactTotalRaw, debtBufferAmount)
+            : FirstNonEmpty(debtCache?.ApproxTotalText, string.Empty);
+        var approxDebtValue = ParseApproxValue(approxDebtText);
 
         return new ClientListItemDto
         {
@@ -299,7 +306,7 @@ public sealed class ClientSyncService
             CardUrl = row.CardUrl ?? string.Empty,
             TotalWithCommissionRaw = exactTotalRaw,
             DebtApproxText = approxDebtText,
-            DebtApproxValue = debtCache?.ApproxTotalValue,
+            DebtApproxValue = approxDebtValue,
             DebtStatus = FirstNonEmpty(debtCache?.Status, string.IsNullOrWhiteSpace(exactTotalRaw) ? "empty" : "ready"),
             DebtSource = FirstNonEmpty(debtCache?.Source, string.IsNullOrWhiteSpace(exactTotalRaw) ? string.Empty : "snapshot"),
             DebtUpdatedAtUtc = debtCache?.UpdatedAtUtc,
@@ -312,7 +319,7 @@ public sealed class ClientSyncService
         };
     }
 
-    private static string BuildApproxDebtText(string exactTotalRaw)
+    private static string BuildApproxDebtText(string exactTotalRaw, int debtBufferAmount)
     {
         if (string.IsNullOrWhiteSpace(exactTotalRaw))
         {
@@ -323,7 +330,23 @@ public sealed class ClientSyncService
         {
             totalWithCommissionRaw = exactTotalRaw
         });
-        return RuleEngineService.BuildApproxDebtText(payload);
+        return RuleEngineService.BuildApproxDebtText(payload, debtBufferAmount);
+    }
+
+    private static int? ParseApproxValue(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var digits = new string(value.Where(char.IsDigit).ToArray());
+        if (string.IsNullOrWhiteSpace(digits))
+        {
+            return null;
+        }
+
+        return int.TryParse(digits, out var parsed) ? parsed : null;
     }
 
     private static string FirstNonEmpty(params string?[] values)

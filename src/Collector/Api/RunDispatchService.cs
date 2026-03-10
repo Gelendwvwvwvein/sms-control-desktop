@@ -1669,7 +1669,7 @@ public sealed class RunDispatchService(
         var messageOverride = ExtractPayloadString(job.PayloadJson, PayloadFieldMessageOverride);
         var usesMessageOverride = !string.IsNullOrWhiteSpace(messageOverride);
         var rendered = !usesMessageOverride
-            ? ruleEngine.BuildDispatchMessage(activeTemplates, job)
+            ? ruleEngine.BuildDispatchMessage(activeTemplates, job, settings.DebtBufferAmount)
             : new RuleEngineMessageResult
             {
                 TemplateId = job.TemplateId,
@@ -1703,7 +1703,7 @@ public sealed class RunDispatchService(
         var resolvedTemplateKind = (previewTemplate?.Kind ?? string.Empty).Trim();
         var resolvedTemplateComment = (previewTemplate?.CommentText ?? string.Empty).Trim();
         var previewPayloadTotal = ExtractPayloadString(job.PayloadJson, "totalWithCommissionRaw");
-        var approxDebtText = RuleEngineService.BuildApproxDebtText(job.PayloadJson);
+        var approxDebtText = RuleEngineService.BuildApproxDebtText(job.PayloadJson, settings.DebtBufferAmount);
         job.PreviewStatus = PreviewStatusReady;
         job.PreviewText = rendered.MessageText;
         job.PreviewVariablesJson = JsonSerializer.Serialize(new

@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Collector.Api;
 
-public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentService)
+public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentService, SettingsStore settingsStore)
 {
     private const string DebtStatusEmpty = "empty";
     private const string DebtStatusReady = "ready";
@@ -82,7 +82,8 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
             return null;
         }
 
-        return BuildStateDto(normalizedExternalClientId, row, cache);
+        var settings = await settingsStore.GetAsync(db, cancellationToken);
+        return BuildStateDto(normalizedExternalClientId, row, cache, settings.DebtBufferAmount);
     }
 
     public async Task<ClientDebtFetchResultDto> FetchByExternalClientIdAsync(
@@ -117,6 +118,7 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
                 cache,
                 code: "DEBT_CARD_URL_MISSING",
                 detail: "У клиента не найден cardUrl для загрузки суммы долга.",
+                debtBufferAmount: settings.DebtBufferAmount,
                 cancellationToken);
 
             return new ClientDebtFetchResultDto
@@ -139,6 +141,7 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
                 cache,
                 code: "DEBT_FETCH_SETTINGS_MISSING",
                 detail: "Для загрузки суммы долга заполните Login URL, логин и пароль в настройках.",
+                debtBufferAmount: settings.DebtBufferAmount,
                 cancellationToken);
 
             return new ClientDebtFetchResultDto
@@ -174,6 +177,7 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
                 cache,
                 code,
                 detail: message,
+                debtBufferAmount: settings.DebtBufferAmount,
                 cancellationToken);
 
             return new ClientDebtFetchResultDto
@@ -187,7 +191,7 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
 
         var nowUtc = DateTime.UtcNow;
         var exactRaw = NormalizeDebtText(fetchResult.TotalWithCommissionRaw);
-        var approxText = BuildApproxText(exactRaw);
+        var approxText = BuildApproxText(exactRaw, settings.DebtBufferAmount);
         var approxValue = ParseApproxValue(approxText);
 
         var target = cache ?? new ClientDebtCacheRecord
@@ -241,7 +245,7 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
             Success = true,
             Code = "DEBT_FETCH_OK",
             Message = "Сумма долга успешно загружена из карточки клиента.",
-            Debt = BuildStateDto(normalizedExternalClientId, row, target)
+            Debt = BuildStateDto(normalizedExternalClientId, row, target, settings.DebtBufferAmount)
         };
     }
 
@@ -272,6 +276,7 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
         ClientDebtCacheRecord? cache,
         string code,
         string detail,
+        int debtBufferAmount,
         CancellationToken cancellationToken)
     {
         var nowUtc = DateTime.UtcNow;
@@ -306,7 +311,7 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
         }
 
         await db.SaveChangesAsync(cancellationToken);
-        return BuildStateDto(externalClientId, row, target);
+        return BuildStateDto(externalClientId, row, target, debtBufferAmount);
     }
 
     private static async Task UpdatePendingRunJobsPayloadTotalAsync(
@@ -356,11 +361,14 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
     private static ClientDebtStateDto BuildStateDto(
         string externalClientId,
         ClientSnapshotRow? row,
-        ClientDebtCacheRecord? cache)
+        ClientDebtCacheRecord? cache,
+        int debtBufferAmount)
     {
         var exactRaw = FirstNonEmpty(cache?.ExactTotalRaw, row?.TotalWithCommissionRaw);
-        var approxText = FirstNonEmpty(cache?.ApproxTotalText, BuildApproxText(exactRaw));
-        var approxValue = cache?.ApproxTotalValue ?? ParseApproxValue(approxText);
+        var approxText = !string.IsNullOrWhiteSpace(exactRaw)
+            ? BuildApproxText(exactRaw, debtBufferAmount)
+            : FirstNonEmpty(cache?.ApproxTotalText, string.Empty);
+        var approxValue = ParseApproxValue(approxText);
 
         var status = FirstNonEmpty(cache?.Status, string.IsNullOrWhiteSpace(exactRaw) ? DebtStatusEmpty : DebtStatusReady);
         var source = FirstNonEmpty(cache?.Source, string.IsNullOrWhiteSpace(exactRaw) ? string.Empty : DebtSourceSnapshot);
@@ -383,7 +391,7 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
         };
     }
 
-    private static string BuildApproxText(string exactRaw)
+    private static string BuildApproxText(string exactRaw, int debtBufferAmount)
     {
         if (string.IsNullOrWhiteSpace(exactRaw))
         {
@@ -394,7 +402,7 @@ public sealed class DebtCacheService(RocketmanCommentService rocketmanCommentSer
         {
             totalWithCommissionRaw = exactRaw
         });
-        return RuleEngineService.BuildApproxDebtText(payload);
+        return RuleEngineService.BuildApproxDebtText(payload, debtBufferAmount);
     }
 
     private static int? ParseApproxValue(string value)

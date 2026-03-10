@@ -168,7 +168,7 @@
               <button class="danger-btn" id="runHistoryClear">Очистить историю</button>
             </div>
           </div>
-          <p class="muted-note">Из истории можно открыть конкретную сессию как рабочую очередь: увидеть ошибки, сделать переотправку и продолжить запуск с точки остановки.</p>
+          <p class="ui-notice ui-notice-info footnote-note">Из истории можно открыть конкретную сессию как рабочую очередь: увидеть ошибки, сделать переотправку и продолжить запуск с точки остановки.</p>
           <div class="table-scroll">
             <table>
               <thead>
@@ -182,7 +182,7 @@
 
       <section class="tab-screen" id="tab-settings">
         <div class="grid two">
-          <article class="card">
+          <article class="card settings-main-card">
             <h3>Rocketman</h3>
             <label>URL входа<input id="cfgLoginUrl" value="https://rocketman.ru/manager/auth/login"></label>
             <label>Логин<input id="cfgLogin"></label>
@@ -194,18 +194,22 @@
             </label>
           </article>
 
-          <article class="card">
+          <article class="card settings-main-card">
             <h3>Правила отправки</h3>
             <label>Интервал между SMS (мин)<input id="cfgGap" type="number" min="1" value="8"></label>
+            <label>Прибавка к реальной сумме долга (₽)
+              <input id="cfgDebtBufferAmount" type="number" min="0" max="1000000" step="1" value="2000">
+            </label>
+            <p class="ui-notice ui-notice-info footnote-note">Используется для переменной {сумма_долга}: к точной сумме прибавляется это значение, затем результат округляется до ближайшей 1000 ₽.</p>
             <label>Не писать повторно, если уже отправляли SMS за последние N дней
               <input id="cfgRecentSmsCooldownDays" type="number" min="0" max="365" value="0">
             </label>
-            <p class="ui-notice ui-notice-info settings-cooldown-note"><strong>Подсказка:</strong> 0 означает, что ограничение выключено. Сравнение идет по календарным датам на этом ПК, без учета часов.</p>
+            <p class="ui-notice ui-notice-info footnote-note">0 означает, что ограничение выключено. Сравнение идет по календарным датам на этом ПК, без учета часов.</p>
             <div class="form-row">
               <label>Рабочее окно: начало<input id="cfgWorkWindowStart" type="time" value="08:00"></label>
               <label>Рабочее окно: конец<input id="cfgWorkWindowEnd" type="time" value="21:00"></label>
             </div>
-            <p class="muted-note">Рабочее окно применяется ко всем исходящим сообщениям по локальному времени клиента.</p>
+            <p class="ui-notice ui-notice-info footnote-note">Рабочее окно применяется ко всем исходящим сообщениям по локальному времени клиента.</p>
             <label class="inline-toggle">
               <input type="checkbox" id="cfgAllowLiveDispatch" checked>
               <span>Разрешить реальную рассылку в LIVE-режиме</span>
@@ -240,7 +244,7 @@
                 <input id="typeDefAutoAssign" type="checkbox">
                 <span>Только ручное назначение (без автоподбора очереди)</span>
               </label>
-              <p class="muted-note">Для ручного типа правило просрочки не требуется.</p>
+              <p class="ui-notice ui-notice-info footnote-note">Для ручного типа правило просрочки не требуется.</p>
               <label id="typeDefFromWrap">Просрочка от (дней)
                 <input id="typeDefFrom" type="number" min="0" step="1" placeholder="5">
               </label>
@@ -259,7 +263,7 @@
               </div>
             </div>
           </div>
-          <p class="muted-note">Изменения типов сохраняются вместе с кнопкой «Сохранить настройки».</p>
+          <p class="ui-notice ui-notice-info footnote-note">Изменения типов сохраняются вместе с кнопкой «Сохранить настройки».</p>
         </article>
 
         <article class="card">
@@ -276,7 +280,7 @@
             </div>
             <label>Endpoint<input id="newChannelEndpoint" placeholder="http://192.168.0.50:8082/"></label>
             <label>Токен канала<input id="newChannelToken" placeholder="UUID token"></label>
-            <p class="muted-note">При редактировании оставьте токен пустым, если не нужно его менять.</p>
+            <p class="ui-notice ui-notice-info footnote-note">При редактировании оставьте токен пустым, если не нужно его менять.</p>
             <div class="actions">
               <button class="ghost-btn" id="cancelChannel">Отмена</button>
               <button class="primary-btn" id="saveChannel">Сохранить канал</button>
@@ -314,7 +318,7 @@
               </div>
             </div>
           </div>
-          <p class="muted-note">Для активного шаблона комментарий обязателен.</p>
+          <p class="ui-notice ui-notice-warning footnote-note">Для активного шаблона комментарий обязателен.</p>
         </article>
 
         <article class="card" id="manualPresetCard">
@@ -330,7 +334,7 @@
             <div class="manual-preset-editor">
               <label>Название типового ответа<input id="manualPresetTitle" placeholder="Например: Договоренность об оплате завтра"></label>
               <label>Текст типового ответа<textarea id="manualPresetText" rows="5" placeholder="{полное_фио}, зафиксировал договоренность об оплате до завтра. Ориентировочная сумма {сумма_долга}."></textarea></label>
-              <p class="muted-note">Поддерживаемые переменные: {полное_фио}, {сумма_долга}.</p>
+              <p class="ui-notice ui-notice-info footnote-note">Поддерживаемые переменные: {полное_фио}, {сумма_долга}.</p>
               <p class="ui-notice ui-notice-warning" id="manualPresetEditorStatus">Выберите типовой ответ из списка или создайте новый.</p>
               <div class="actions manual-preset-editor-actions">
                 <button class="ghost-btn" id="manualPresetNew">Создать новый типовой</button>
@@ -357,7 +361,7 @@
                 <tbody id="templatesBody"></tbody>
               </table>
             </div>
-            <p class="muted-note">Комментарий задается отдельно в настройках: «Комментарии в договор».</p>
+            <p class="ui-notice ui-notice-info footnote-note">Комментарий задается отдельно в настройках: «Комментарии в договор».</p>
           </article>
 
           <article class="card">
@@ -371,7 +375,7 @@
             <input id="tplOverdueTo" type="hidden">
             <input id="tplOverdueExact" type="hidden">
             <input id="tplAutoAssign" type="checkbox" hidden>
-            <p class="muted-note template-rule-source-note">Правило просрочки и участие в автоподборе берутся из выбранного типа шаблона.</p>
+            <p class="ui-notice ui-notice-info footnote-note template-rule-source-note">Правило просрочки и участие в автоподборе берутся из выбранного типа шаблона.</p>
             <label>Название<input id="tplName"></label>
             <label>Текст<textarea id="tplText" rows="8"></textarea></label>
             <div class="chips">
@@ -393,7 +397,7 @@
       <section class="tab-screen" id="tab-clients">
         <article class="card">
           <h3>Актуальная база клиентов</h3>
-          <p class="muted-note">Эта вкладка показывает полный набор клиентов после кнопки «Актуализировать базу клиентов».</p>
+          <p class="ui-notice ui-notice-info footnote-note">Эта вкладка показывает полный набор клиентов после кнопки «Актуализировать базу клиентов».</p>
           <div class="filters">
             <label>Поиск
               <input id="clientsSearch" placeholder="ФИО, телефон или № договора">
@@ -444,7 +448,6 @@
       <section class="tab-screen" id="tab-queue">
         <article class="card">
           <h3>Плановая/текущая очередь отправок</h3>
-          <p class="ui-notice ui-notice-info queue-footnote">До запуска очередь можно редактировать вручную. Во время запуска фильтры и состав текущей очереди не пересчитываются.</p>
           <div class="filters">
             <label>Поиск
               <input id="queueSearch" placeholder="ФИО, телефон или № договора">
@@ -485,7 +488,7 @@
           <div class="actions">
             <button class="ghost-btn" id="queueRetryErrors" disabled>Переотправить ошибки</button>
           </div>
-          <p class="ui-notice ui-notice-info queue-footnote" id="queueRetryHint">Переотправляются задачи со статусами «Ошибка» и «Остановлено».</p>
+          <p class="ui-notice ui-notice-info footnote-note" id="queueRetryHint">Переотправляются задачи со статусами «Ошибка» и «Остановлено».</p>
           <div class="actions bulk-toolbar table-actions-sticky">
             <span class="bulk-meta" id="queueBulkMeta">Выбрано: 0</span>
             <button class="ghost-btn" id="queueSelectVisible">Выбрать все</button>
@@ -518,7 +521,7 @@
       <section class="tab-screen" id="tab-dialogs">
         <div class="dialog-layout">
           <aside>
-            <div class="filters">
+            <div class="filters dialog-filters">
               <label>Поиск
                 <input id="dialogsSearch" placeholder="ФИО, телефон или № договора">
               </label>
@@ -546,13 +549,13 @@
             </label>
             <div class="dialog-preview-panel hidden" id="dialogPreviewPanel">
               <p class="ui-notice ui-notice-info" id="dialogPreviewStatus">Превью еще не загружено.</p>
-              <p class="muted-note dialog-preview-meta" id="dialogPreviewMeta">Итоговый текст формируется backend по текущему шаблону и данным клиента.</p>
+              <p class="dialog-preview-meta" id="dialogPreviewMeta">Итоговый текст формируется backend по текущему шаблону и данным клиента.</p>
               <textarea class="dialog-preview-editor" id="dialogPreviewEditor" rows="6" placeholder="Здесь можно отредактировать SMS для выбранного клиента"></textarea>
               <div class="actions slim dialog-preview-actions">
                 <button class="primary-btn" id="dialogPreviewSave" disabled>Сохранить текст для клиента</button>
                 <button class="ghost-btn" id="dialogPreviewReset" disabled>Сбросить к шаблону</button>
               </div>
-              <p class="muted-note dialog-preview-hint" id="dialogPreviewEditorHint">После сохранения этот текст будет отправлен именно этому клиенту вместо текста шаблона.</p>
+              <p class="ui-notice ui-notice-info footnote-note dialog-preview-hint" id="dialogPreviewEditorHint">После сохранения этот текст будет отправлен именно этому клиенту вместо текста шаблона.</p>
             </div>
             <label class="dialog-preset-label">Типовой ответ для черновика
               <select id="manualPreset">

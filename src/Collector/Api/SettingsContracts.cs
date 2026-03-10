@@ -16,6 +16,7 @@ public sealed class AppSettingsDto
     public string Password { get; set; } = string.Empty;
     public int Gap { get; set; } = 8;
     public int RecentSmsCooldownDays { get; set; }
+    public int DebtBufferAmount { get; set; } = 2000;
     public bool AllowLiveDispatch { get; set; } = true;
     public string WorkWindowStart { get; set; } = "08:00";
     public string WorkWindowEnd { get; set; } = "21:00";

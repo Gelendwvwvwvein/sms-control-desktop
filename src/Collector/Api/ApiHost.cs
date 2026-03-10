@@ -2029,6 +2029,15 @@ public static class ApiHost
             };
         }
 
+        if (payload.DebtBufferAmount < 0 || payload.DebtBufferAmount > 1_000_000)
+        {
+            return new ApiErrorDto
+            {
+                Code = "CFG_INVALID_DEBT_BUFFER_AMOUNT",
+                Message = "Надбавка к сумме долга должна быть в диапазоне от 0 до 1 000 000 руб."
+            };
+        }
+
         if (!TryParseHm(payload.WorkWindowStart, out var start))
         {
             return new ApiErrorDto
