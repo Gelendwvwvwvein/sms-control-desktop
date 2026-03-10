@@ -4,7 +4,7 @@
 
 - `docs/development_documentation.md` — техническая документация backend/frontend, API и архитектура.
 - `docs/employee_approval_scenario.md` — подробный пользовательский сценарий работы сотрудника.
-- `docs/dom_mapping_rocketman.md` — фактическая DOM-карта Rocketman для интеграции.
+- `docs/dom_mapping_rocketman.md` — фактическая DOM-карта плтформы для интеграции.
 - `docs/windows_deployment.md` — инструкция сборки релиза `.exe`, установки и обновления без потери локальной БД.
 
 Устаревшие черновики и шаблоны планирования удалены из репозитория.
